@@ -494,9 +494,6 @@ async function loadWeekly() {
         }
     }
 
-    const totalCells = totals.map(m => `<td style="text-align:center">${m > 0 ? toHHMM(m) : '-'}</td>`).join('')
-    rows += `<tr class="total-row"><td>合計</td>${totalCells}<td style="text-align:center">${toHHMM(grandTotal)}</td></tr>`
-
     document.getElementById('weekly-tbl').innerHTML = `
         <table>
             <thead><tr><th>名前</th>${dayHdrs}<th style="text-align:center">週合計</th></tr></thead>
