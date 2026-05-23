@@ -474,8 +474,10 @@ async function loadShiftsMonthly() {
     document.getElementById('pn-shifts').textContent = `シフト表 ${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
 
     const filterEl = document.getElementById('shift-team-filter')
+    const prevFilter = filterEl.value
     filterEl.innerHTML = '<option value="all">全員</option>' +
         teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('')
+    filterEl.value = prevFilter || 'all'
     const teamFilter = filterEl.value
 
     const { data: shifts } = await db.from('shifts').select('*').gte('date', from).lte('date', to)
