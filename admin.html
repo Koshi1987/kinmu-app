@@ -133,6 +133,7 @@
         <div class="tab"         onclick="switchTab('shifts')">🗓 シフト表</div>
         <div class="tab"         onclick="switchTab('employees')">👥 職員管理</div>
         <div class="tab"         onclick="switchTab('qr')">📱 QRコード</div>
+        <div class="tab" onclick="switchTab('monthly')">👤 月間記録</div>
     </div>
 
     <div class="content">
@@ -201,6 +202,18 @@
             <div id="emp-list-admin"></div>
         </div>
 
+        <!-- 月間記録 -->
+        <div id="tab-monthly" class="hidden">
+            <div class="sec-hd"><span class="sec-title">月間個人記録</span></div>
+            <div class="form-row">
+                <select id="monthly-emp"></select>
+                <input type="month" id="monthly-month">
+                <button class="btn btn-primary" onclick="loadMonthly()">表示</button>
+            </div>
+            <div class="print-note" id="pn-monthly-emp"></div>
+            <div class="tbl-wrap" id="monthly-tbl"></div>
+        </div>
+
         <!-- QRコード -->
         <div id="tab-qr" class="hidden">
             <div class="sec-hd"><span class="sec-title">QRコード</span></div>
@@ -261,6 +274,7 @@ function switchTab(name) {
     if (name === 'weekly')    loadWeekly()
     if (name === 'employees') renderEmployees()
     if (name === 'qr')        renderQR()
+    if (name === 'monthly')   initMonthly()
     if (name === 'shifts')    loadShifts()
 }
 
@@ -542,7 +556,28 @@ async function deleteEmployee(id, name) {
     renderEmployees()
 }
 
-// ---- QRコード ----
+// ---- 月間個人記録 ----
+function initMonthly() {
+    const sel = document.getElementById('monthly-emp')
+    sel.innerHTML = employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+    const now = new Date()
+    document.getElementById('monthly-month').value =
+        `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`
+}
+
+async function loadMonthly() {
+    const empId = document.getElementById('monthly-emp').value
+    const month = document.getElementById('monthly-month').value
+    if (!empId || !month) return alert('職員と月を選択してください')
+    const emp = employees.find(e => e.id === empId)
+    const [year, mon] = month.split('-')
+    const from = `${month}-01`
+    const lastDay = new Date(parseInt(year), parseInt(mon), 0).getDate()
+    const to = `${month}-${String(lastDay).padStart(2,'0')}`
+    document.getElementById('pn-monthly-emp').textContent =
+        `${emp.name} ${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
+    const { data } = await db.from('attendance')
+        .select('*').eq('employee_id', e
 function renderQR() {
     const base = location.origin + location.pathname.replace('admin.html', 'index.html')
     let html = ''
