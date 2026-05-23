@@ -175,16 +175,29 @@
         <div id="tab-shifts" class="hidden">
             <div class="sec-hd">
                 <span class="sec-title">シフト表</span>
-                <div class="week-nav">
-                    <button onclick="changeShiftWeek(-1)">◀</button>
-                    <span class="week-label" id="shift-week-label"></span>
-                    <button onclick="changeShiftWeek(1)">▶</button>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                    <div class="week-nav">
+                        <button onclick="changeShiftMonth(-1)">◀</button>
+                        <span class="week-label" id="shift-month-label"></span>
+                        <button onclick="changeShiftMonth(1)">▶</button>
+                    </div>
+                    <select id="shift-team-filter" onchange="loadShiftsMonthly()">
+                        <option value="all">全員</option>
+                    </select>
                 </div>
             </div>
-            <div class="tbl-wrap" id="shift-tbl"></div>
-            <div style="margin-top:14px;text-align:right">
-                <button class="btn btn-primary" onclick="saveShifts()">💾 保存する</button>
+            <div class="print-note" id="pn-shifts"></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">
+                <span style="background:#dbeafe;padding:3px 10px;border-radius:4px">日勤</span>
+                <span style="background:#fff3e0;padding:3px 10px;border-radius:4px">午前</span>
+                <span style="background:#fce7f3;padding:3px 10px;border-radius:4px">午後</span>
+                <span style="background:#f3e5f5;padding:3px 10px;border-radius:4px">変則</span>
+                <span style="background:#fce4ec;padding:3px 10px;border-radius:4px">春夏</span>
+                <span style="background:#dcfce7;padding:3px 10px;border-radius:4px">有給</span>
+                <span style="background:#f3f4f6;padding:3px 10px;border-radius:4px">休</span>
+                <small style="color:#9ca3af;padding:3px 0">（セルをクリックで変更）</small>
             </div>
+            <div id="shift-tbl-monthly"></div>
         </div>
 
         <!-- 職員管理 -->
@@ -194,6 +207,12 @@
                 <div class="form-row">
                     <input type="text" id="new-name" placeholder="名前を入力">
                     <select id="new-team"></select>
+                    <select id="new-shift">
+                        <option value="日勤">日勤</option>
+                        <option value="午前">午前パート</option>
+                        <option value="午後">午後パート</option>
+                        <option value="変則">変則パート</option>
+                    </select>
                     <button class="btn btn-primary" onclick="addEmployee()">追加</button>
                 </div>
                 <div id="emp-msg"></div>
@@ -237,7 +256,13 @@ const { createClient } = window.supabase
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 let employees = [], teams = []
-let weekOffset = 0, shiftWeekOffset = 0, shiftData = {}
+let weekOffset = 0, shiftMonthOffset = 0
+
+const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','休']
+const SHIFT_COLORS = {
+    '日勤':'#dbeafe', '午前':'#fff3e0', '午後':'#fce7f3',
+    '変則':'#f3e5f5', '春夏':'#fce4ec', '有給':'#dcfce7', '休':'#f3f4f6'
+}
 
 // ---- パスワード ----
 function checkPw() {
@@ -275,7 +300,7 @@ function switchTab(name) {
     if (name === 'employees') renderEmployees()
     if (name === 'qr')        renderQR()
     if (name === 'monthly')   initMonthly()
-    if (name === 'shifts')    loadShifts()
+    if (name === 'shifts')    loadShiftsMonthly()
 }
 
 // ---- 今日の状況 ----
@@ -432,68 +457,85 @@ async function loadWeekly() {
 function changeWeek(d) { weekOffset += d; loadWeekly() }
 
 // ---- シフト表 ----
-async function loadShifts() {
-    const days = getWeekDays(shiftWeekOffset)
-    const from = days[0].toLocaleDateString('sv-SE')
-    const to   = days[6].toLocaleDateString('sv-SE')
-    document.getElementById('shift-week-label').textContent =
-        `${days[0].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})} 〜 ${days[6].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})}`
+function getShiftMonth() {
+    const now = new Date()
+    const d = new Date(now.getFullYear(), now.getMonth() + shiftMonthOffset, 1)
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
+}
+
+async function loadShiftsMonthly() {
+    const month = getShiftMonth()
+    const [year, mon] = month.split('-')
+    const lastDay = new Date(parseInt(year), parseInt(mon), 0).getDate()
+    const from = `${month}-01`
+    const to   = `${month}-${String(lastDay).padStart(2,'0')}`
+
+    document.getElementById('shift-month-label').textContent = `${year}年${mon}月`
+    document.getElementById('pn-shifts').textContent = `シフト表 ${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
+
+    const filterEl = document.getElementById('shift-team-filter')
+    filterEl.innerHTML = '<option value="all">全員</option>' +
+        teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('')
+    const teamFilter = filterEl.value
 
     const { data: shifts } = await db.from('shifts').select('*').gte('date', from).lte('date', to)
-    shiftData = {}
-    for (const s of shifts || []) shiftData[`${s.employee_id}_${s.date}`] = s
+    const overrideMap = {}
+    for (const s of shifts || []) {
+        if (s.shift_type) overrideMap[`${s.employee_id}_${s.date}`] = s.shift_type
+    }
 
-    const dayHdrs = days.map(d =>
-        `<th style="text-align:center;font-size:12px">${['日','月','火','水','木','金','土'][d.getDay()]}<br>${d.getDate()}日</th>`
-    ).join('')
+    const displayEmps = teamFilter === 'all' ? employees :
+        employees.filter(e => e.team_id === parseInt(teamFilter))
 
-    let rows = ''
-    for (const team of teams) {
-        const te = employees.filter(e => e.team_id === team.id)
-        if (!te.length) continue
-        rows += `<tr class="team-row"><td colspan="8" style="padding:8px 12px">${team.name}</td></tr>`
-        for (const emp of te) {
-            const cells = days.map(d => {
-                const ds  = d.toLocaleDateString('sv-SE')
-                const key = `${emp.id}_${ds}`
-                const sh  = shiftData[key]
-                return `<td style="padding:6px;text-align:center">
-                    <input class="shift-input" type="time" data-emp="${emp.id}" data-date="${ds}" data-field="start_time" value="${sh?.start_time||''}">
-                    <br><small>〜</small><br>
-                    <input class="shift-input" type="time" data-emp="${emp.id}" data-date="${ds}" data-field="end_time" value="${sh?.end_time||''}">
-                </td>`
-            }).join('')
-            rows += `<tr><td style="white-space:nowrap;font-weight:500;padding:8px 12px">${emp.name}</td>${cells}</tr>`
+    const days = []
+    for (let d = 1; d <= lastDay; d++) {
+        const date = new Date(parseInt(year), parseInt(mon)-1, d)
+        days.push({ d, dow: date.getDay(), ds: `${month}-${String(d).padStart(2,'0')}` })
+    }
+
+    let hdr = '<th style="min-width:64px;position:sticky;left:0;background:#f8fafc;z-index:2">名前</th>'
+    for (const { d, dow } of days) {
+        const bg = dow===0 ? '#fee2e2' : dow===6 ? '#fef3c7' : '#f8fafc'
+        hdr += `<th style="background:${bg};min-width:28px;text-align:center;font-size:10px;padding:3px 1px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
+    }
+
+    let rows = '', curTeam = null
+    for (const emp of displayEmps) {
+        if (teamFilter === 'all' && emp.team_id !== curTeam) {
+            curTeam = emp.team_id
+            const tn = teams.find(t => t.id === curTeam)?.name || ''
+            rows += `<tr class="team-row"><td colspan="${lastDay+1}">${tn}</td></tr>`
         }
+        let cells = `<td style="white-space:nowrap;font-weight:600;position:sticky;left:0;background:white;z-index:1;padding:5px 8px;font-size:13px">${emp.name}</td>`
+        for (const { dow, ds } of days) {
+            const key = `${emp.id}_${ds}`
+            const isWknd = dow===0 || dow===6
+            const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd ? '休' : (emp.default_shift || '日勤'))
+            const bg = SHIFT_COLORS[st] || '#fff'
+            const empId = emp.id
+            cells += `<td onclick="cycleShift('${empId}','${ds}','${st}')"
+                style="background:${bg};text-align:center;font-size:10px;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0">${st}</td>`
+        }
+        rows += `<tr>${cells}</tr>`
     }
 
-    document.getElementById('shift-tbl').innerHTML = `
-        <table style="background:white;border-radius:12px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.07)">
-            <thead><tr><th>名前</th>${dayHdrs}</tr></thead>
-            <tbody>${rows}</tbody>
-        </table>`
+    document.getElementById('shift-tbl-monthly').innerHTML =
+        `<div style="overflow-x:auto"><table style="border-collapse:collapse;background:white;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07)">
+        <thead><tr>${hdr}</tr></thead><tbody>${rows}</tbody></table></div>`
 }
 
-async function saveShifts() {
-    const inputs  = document.querySelectorAll('.shift-input')
-    const updates = {}
-    for (const inp of inputs) {
-        const key = `${inp.dataset.emp}_${inp.dataset.date}`
-        if (!updates[key]) updates[key] = { employee_id: inp.dataset.emp, date: inp.dataset.date }
-        updates[key][inp.dataset.field] = inp.value || null
+async function cycleShift(empId, date, current) {
+    const next = SHIFT_TYPES[(SHIFT_TYPES.indexOf(current) + 1) % SHIFT_TYPES.length]
+    const { data } = await db.from('shifts').select('id').eq('employee_id', empId).eq('date', date)
+    if (data && data.length > 0) {
+        await db.from('shifts').update({ shift_type: next }).eq('id', data[0].id)
+    } else {
+        await db.from('shifts').insert({ employee_id: empId, date, shift_type: next })
     }
-    for (const key of Object.keys(updates)) {
-        const u = updates[key]
-        if (!u.start_time && !u.end_time) continue
-        const ex = shiftData[key]
-        if (ex) await db.from('shifts').update({ start_time: u.start_time, end_time: u.end_time }).eq('id', ex.id)
-        else    await db.from('shifts').insert(u)
-    }
-    alert('シフトを保存しました！')
-    loadShifts()
+    loadShiftsMonthly()
 }
 
-function changeShiftWeek(d) { shiftWeekOffset += d; loadShifts() }
+function changeShiftMonth(d) { shiftMonthOffset += d; loadShiftsMonthly() }
 
 // ---- 職員管理 ----
 function renderEmployees() {
@@ -527,7 +569,8 @@ async function addEmployee() {
     const name   = document.getElementById('new-name').value.trim()
     const teamId = parseInt(document.getElementById('new-team').value)
     if (!name) return showMsg('emp-msg', '名前を入力してください', false)
-    const { error } = await db.from('employees').insert({ name, team_id: teamId })
+    const defaultShift = document.getElementById('new-shift').value
+    const { error } = await db.from('employees').insert({ name, team_id: teamId, default_shift: defaultShift })
     if (error) return showMsg('emp-msg', 'エラー: ' + error.message, false)
     document.getElementById('new-name').value = ''
     showMsg('emp-msg', name + ' を追加しました', true)
