@@ -325,6 +325,8 @@ function switchTab(name) {
     names.forEach(n =>
         document.getElementById('tab-' + n).classList.toggle('hidden', n !== name)
     )
+    // シフト表タブは全画面幅を使う、他は960px制限に戻す
+    document.querySelector('.content').style.maxWidth = (name === 'shifts') ? 'none' : ''
     if (name === 'today')     loadToday()
     if (name === 'weekly')    loadWeekly()
     if (name === 'employees') renderEmployees()
