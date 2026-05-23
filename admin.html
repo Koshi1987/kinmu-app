@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理画面</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif; background: #f5f7fa; }
+
+        /* パスワード画面 */
+        .pw-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+        .pw-card { background: white; border-radius: 20px; padding: 40px 32px; box-shadow: 0 4px 20px rgba(0,0,0,.1); width: 100%; max-width: 320px; text-align: center; }
+        .pw-title { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+        .pw-sub { color: #6b7280; font-size: 14px; margin-bottom: 24px; }
+        .pw-input { width: 100%; padding: 14px; font-size: 24px; border: 2px solid #e5e7eb; border-radius: 12px; text-align: center; letter-spacing: 8px; margin-bottom: 16px; outline: none; }
+        .pw-input:focus { border-color: #3b82f6; }
+        .pw-btn { width: 100%; padding: 14px; background: #1d4ed8; color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; }
+        .pw-err { color: #ef4444; font-size: 14px; margin-top: 10px; }
+
+        /* ヘッダー */
+        header { background: linear-gradient(135deg, #1d4ed8, #3b82f6); color: white; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { font-size: 18px; font-weight: 700; }
+        .hd-btn { background: rgba(255,255,255,.2); border: none; color: white; padding: 7px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; margin-left: 6px; }
+
+        /* タブ */
+        .tabs { background: white; border-bottom: 1px solid #e5e7eb; display: flex; overflow-x: auto; }
+        .tab { padding: 12px 16px; font-size: 13px; font-weight: 500; color: #6b7280; cursor: pointer; white-space: nowrap; border-bottom: 3px solid transparent; transition: color .15s; }
+        .tab.active { color: #1d4ed8; border-bottom-color: #1d4ed8; }
+
+        .content { max-width: 960px; margin: 0 auto; padding: 20px; }
+
+        /* テーブル */
+        .tbl-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+        th { background: #f8fafc; font-size: 12px; font-weight: 600; color: #6b7280; padding: 11px 14px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        td { padding: 11px 14px; font-size: 14px; border-bottom: 1px solid #f3f4f6; }
+        tr:last-child td { border-bottom: none; }
+        .total-row td { font-weight: 700; background: #f8fafc; }
+        .team-row td { background: #f1f5f9; font-weight: 700; font-size: 13px; color: #374151; }
+
+        .badge { font-size: 11px; padding: 3px 9px; border-radius: 999px; font-weight: 500; display: inline-block; }
+        .b-work  { background: #dcfce7; color: #15803d; }
+        .b-break { background: #fef9c3; color: #92400e; }
+        .b-done  { background: #f1f5f9; color: #475569; }
+        .b-none  { background: #f3f4f6; color: #9ca3af; }
+
+        /* セクションヘッダー */
+        .sec-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+        .sec-title { font-size: 18px; font-weight: 700; }
+
+        /* フォーム部品 */
+        .form-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+        input[type="date"], input[type="text"], input[type="time"], select {
+            padding: 9px 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 14px; background: white; outline: none;
+        }
+        input[type="date"]:focus, input[type="text"]:focus, input[type="time"]:focus, select:focus { border-color: #3b82f6; }
+        .btn { padding: 9px 18px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+        .btn-primary { background: #1d4ed8; color: white; }
+        .btn-danger  { background: #ef4444; color: white; }
+        .btn-ghost   { background: #f3f4f6; color: #374151; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+        /* 職員カード */
+        .emp-card { background: white; border-radius: 12px; padding: 14px 18px; box-shadow: 0 1px 6px rgba(0,0,0,.07); display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .emp-info .name { font-size: 16px; font-weight: 600; }
+        .emp-info .team-lbl { font-size: 12px; color: #6b7280; margin-top: 2px; }
+        .emp-actions { display: flex; gap: 8px; }
+
+        /* 追加フォーム */
+        .add-form { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 6px rgba(0,0,0,.07); margin-bottom: 20px; }
+        .add-form h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+
+        /* QRコード */
+        .qr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+        .qr-card { background: white; border-radius: 12px; padding: 20px; text-align: center; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+        .qr-card .name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+        .qr-card .team-lbl { font-size: 12px; color: #6b7280; margin-bottom: 12px; }
+        .qr-card img { width: 150px; height: 150px; }
+
+        /* シフト */
+        .shift-input { width: 82px; padding: 4px 6px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 12px; }
+        .week-nav { display: flex; align-items: center; gap: 10px; }
+        .week-nav button { background: #f3f4f6; border: none; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+        .week-label { font-size: 14px; font-weight: 500; }
+
+        /* メッセージ */
+        .msg { padding: 12px 16px; border-radius: 10px; margin-bottom: 12px; font-size: 14px; }
+        .msg-ok  { background: #dcfce7; color: #15803d; }
+        .msg-err { background: #fef2f2; color: #b91c1c; }
+
+        .loading { text-align: center; color: #9ca3af; padding: 40px; }
+        .print-note { display: none; font-size: 12px; color: #666; text-align: right; margin-bottom: 8px; }
+
+        @media print {
+            header, .tabs, .sec-hd .btn, .sec-hd .week-nav button, .form-row, .hd-btn { display: none !important; }
+            .print-note { display: block !important; }
+            body { background: white; }
+        }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<!-- パスワード画面 -->
+<div id="pw-screen" class="pw-screen">
+    <div class="pw-card">
+        <div class="pw-title">🔐 管理画面</div>
+        <div class="pw-sub">パスワードを入力してください</div>
+        <input type="password" class="pw-input" id="pw-input" placeholder="••••"
+               onkeyup="if(event.key==='Enter') checkPw()">
+        <button class="pw-btn" onclick="checkPw()">ログイン</button>
+        <div class="pw-err hidden" id="pw-err">パスワードが違います</div>
+    </div>
+</div>
+
+<!-- メインアプリ -->
+<div id="main-app" class="hidden">
+    <header>
+        <h1>⚙️ 管理画面</h1>
+        <div>
+            <button class="hd-btn" onclick="window.print()">🖨 印刷</button>
+            <button class="hd-btn" onclick="location.href='index.html'">打刻ページへ</button>
+        </div>
+    </header>
+
+    <div class="tabs">
+        <div class="tab active"  onclick="switchTab('today')">📊 今日の状況</div>
+        <div class="tab"         onclick="switchTab('records')">📅 勤務記録</div>
+        <div class="tab"         onclick="switchTab('weekly')">📈 週間集計</div>
+        <div class="tab"         onclick="switchTab('shifts')">🗓 シフト表</div>
+        <div class="tab"         onclick="switchTab('employees')">👥 職員管理</div>
+        <div class="tab"         onclick="switchTab('qr')">📱 QRコード</div>
+    </div>
+
+    <div class="content">
+        <!-- 今日の状況 -->
+        <div id="tab-today">
+            <div class="sec-hd">
+                <span class="sec-title" id="today-title">今日の出勤状況</span>
+                <button class="btn btn-ghost" onclick="loadToday()">🔄 更新</button>
+            </div>
+            <div class="print-note" id="pn-today"></div>
+            <div class="tbl-wrap" id="today-tbl"></div>
+        </div>
+
+        <!-- 勤務記録 -->
+        <div id="tab-records" class="hidden">
+            <div class="sec-hd"><span class="sec-title">勤務記録</span></div>
+            <div class="form-row">
+                <input type="date" id="rec-date">
+                <button class="btn btn-primary" onclick="loadRecords()">表示</button>
+            </div>
+            <div id="rec-tbl"></div>
+        </div>
+
+        <!-- 週間集計 -->
+        <div id="tab-weekly" class="hidden">
+            <div class="sec-hd">
+                <span class="sec-title">週間集計</span>
+                <div class="week-nav">
+                    <button onclick="changeWeek(-1)">◀</button>
+                    <span class="week-label" id="week-label"></span>
+                    <button onclick="changeWeek(1)">▶</button>
+                </div>
+            </div>
+            <div class="print-note" id="pn-weekly"></div>
+            <div class="tbl-wrap" id="weekly-tbl"></div>
+        </div>
+
+        <!-- シフト表 -->
+        <div id="tab-shifts" class="hidden">
+            <div class="sec-hd">
+                <span class="sec-title">シフト表</span>
+                <div class="week-nav">
+                    <button onclick="changeShiftWeek(-1)">◀</button>
+                    <span class="week-label" id="shift-week-label"></span>
+                    <button onclick="changeShiftWeek(1)">▶</button>
+                </div>
+            </div>
+            <div class="tbl-wrap" id="shift-tbl"></div>
+            <div style="margin-top:14px;text-align:right">
+                <button class="btn btn-primary" onclick="saveShifts()">💾 保存する</button>
+            </div>
+        </div>
+
+        <!-- 職員管理 -->
+        <div id="tab-employees" class="hidden">
+            <div class="add-form">
+                <h3>職員を追加する</h3>
+                <div class="form-row">
+                    <input type="text" id="new-name" placeholder="名前を入力">
+                    <select id="new-team"></select>
+                    <button class="btn btn-primary" onclick="addEmployee()">追加</button>
+                </div>
+                <div id="emp-msg"></div>
+            </div>
+            <div class="sec-hd"><span class="sec-title">職員一覧</span></div>
+            <div id="emp-list-admin"></div>
+        </div>
+
+        <!-- QRコード -->
+        <div id="tab-qr" class="hidden">
+            <div class="sec-hd"><span class="sec-title">QRコード</span></div>
+            <p style="font-size:13px;color:#6b7280;margin-bottom:16px">
+                各職員のQRコードを印刷して渡してください。スマホで読み込むと打刻ページが開きます。
+            </p>
+            <div class="qr-grid" id="qr-grid"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// =============================================
+// 設定：sb_publishable_41dGpTLOwn_S0CuI8JxY7A_WkUuTSX9 を自分のキーに変える
+const SUPABASE_URL = 'https://afqhuswlhgcqaduyppja.supabase.co'
+const SUPABASE_KEY = 'sb_publishable_41dGpTLOwn_S0CuI8JxY7A_WkUuTSX9'
+const ADMIN_PASSWORD = '1234'   // ← パスワードはここで変えられます
+// =============================================
+
+const { createClient } = window.supabase
+const db = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+let employees = [], teams = []
+let weekOffset = 0, shiftWeekOffset = 0, shiftData = {}
+
+// ---- パスワード ----
+function checkPw() {
+    if (document.getElementById('pw-input').value === ADMIN_PASSWORD) {
+        document.getElementById('pw-screen').classList.add('hidden')
+        document.getElementById('main-app').classList.remove('hidden')
+        loadMaster()
+        switchTab('today')
+    } else {
+        document.getElementById('pw-err').classList.remove('hidden')
+    }
+}
+
+// ---- 基本データ読み込み ----
+async function loadMaster() {
+    const [tr, er] = await Promise.all([
+        db.from('teams').select('*').order('id'),
+        db.from('employees').select('*,teams(name)').eq('active', true).order('name')
+    ])
+    teams     = tr.data || []
+    employees = er.data || []
+}
+
+// ---- タブ切り替え ----
+function switchTab(name) {
+    const names = ['today','records','weekly','shifts','employees','qr']
+    document.querySelectorAll('.tab').forEach((t, i) =>
+        t.classList.toggle('active', names[i] === name)
+    )
+    names.forEach(n =>
+        document.getElementById('tab-' + n).classList.toggle('hidden', n !== name)
+    )
+    if (name === 'today')     loadToday()
+    if (name === 'weekly')    loadWeekly()
+    if (name === 'employees') renderEmployees()
+    if (name === 'qr')        renderQR()
+    if (name === 'shifts')    loadShifts()
+}
+
+// ---- 今日の状況 ----
+async function loadToday() {
+    const today = new Date()
+    const ds = today.toLocaleDateString('sv-SE')
+    document.getElementById('today-title').textContent =
+        today.toLocaleDateString('ja-JP', { year:'numeric', month:'long', day:'numeric', weekday:'short' }) + 'の出勤状況'
+    document.getElementById('pn-today').textContent = '印刷日時: ' + new Date().toLocaleString('ja-JP')
+
+    const { data: att } = await db.from('attendance').select('*').eq('date', ds).order('timestamp')
+
+    const empAtt = {}
+    for (const r of att || []) {
+        if (!empAtt[r.employee_id]) empAtt[r.employee_id] = []
+        empAtt[r.employee_id].push(r)
+    }
+
+    let rows = '', present = 0
+    for (const team of teams) {
+        const te = employees.filter(e => e.team_id === team.id)
+        if (!te.length) continue
+        rows += `<tr class="team-row"><td colspan="5">${team.name}</td></tr>`
+        for (const emp of te) {
+            const recs = empAtt[emp.id] || []
+            const st   = recs.length ? recs[recs.length - 1].type : null
+            let badge = '<span class="badge b-none">未出勤</span>'
+            if (st === 'clock_in' || st === 'break_end') { badge = '<span class="badge b-work">勤務中</span>';  present++ }
+            else if (st === 'break_start')               { badge = '<span class="badge b-break">休憩中</span>'; present++ }
+            else if (st === 'clock_out')                   badge = '<span class="badge b-done">退勤</span>'
+
+            const ci = recs.find(r => r.type === 'clock_in')
+            const co = [...recs].reverse().find(r => r.type === 'clock_out')
+            const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'})
+            const mins = calcMins(recs)
+
+            rows += `<tr>
+                <td>${emp.name}</td>
+                <td>${badge}</td>
+                <td>${ci ? fmt(ci.timestamp) : '-'}</td>
+                <td>${co ? fmt(co.timestamp) : '-'}</td>
+                <td>${mins > 0 ? toHHMM(mins) : '-'}</td>
+            </tr>`
+        }
+    }
+
+    document.getElementById('today-tbl').innerHTML = `
+        <table>
+            <thead><tr><th>名前</th><th>状態</th><th>出勤</th><th>退勤</th><th>勤務時間</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+        <p style="margin-top:12px;font-size:13px;color:#6b7280">
+            出勤中: ${present}名 ／ 全${employees.length}名
+        </p>`
+}
+
+// ---- 勤務記録 ----
+async function loadRecords() {
+    const date = document.getElementById('rec-date').value
+    if (!date) return alert('日付を選択してください')
+    const { data } = await db.from('attendance').select('*,employees(name)').eq('date', date).order('timestamp')
+    const lbl = { clock_in:'出勤', break_start:'休憩イン', break_end:'休憩アウト', clock_out:'退勤' }
+    let rows = ''
+    for (const r of data || []) {
+        const t = new Date(r.timestamp).toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+        rows += `<tr><td>${t}</td><td>${r.employees?.name || '-'}</td><td>${lbl[r.type] || r.type}</td></tr>`
+    }
+    if (!rows) rows = '<tr><td colspan="3" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    document.getElementById('rec-tbl').innerHTML = `
+        <table><thead><tr><th>時刻</th><th>名前</th><th>打刻種別</th></tr></thead>
+        <tbody>${rows}</tbody></table>`
+}
+
+// ---- 週間集計 ----
+function getWeekDays(offset) {
+    const now = new Date(), dow = now.getDay()
+    const mon = new Date(now)
+    mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1) + offset * 7)
+    mon.setHours(0, 0, 0, 0)
+    return Array.from({length: 7}, (_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return d })
+}
+
+async function loadWeekly() {
+    const days = getWeekDays(weekOffset)
+    const from = days[0].toLocaleDateString('sv-SE')
+    const to   = days[6].toLocaleDateString('sv-SE')
+    const wkLbl = `${days[0].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})} 〜 ${days[6].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})}`
+    document.getElementById('week-label').textContent = wkLbl
+    document.getElementById('pn-weekly').textContent  = `週間集計 ${wkLbl}　印刷日時: ${new Date().toLocaleString('ja-JP')}`
+
+    const { data: att } = await db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp')
+    const dayHdrs = days.map(d =>
+        `<th style="text-align:center">${['日','月','火','水','木','金','土'][d.getDay()]}<br><small>${d.getDate()}日</small></th>`
+    ).join('')
+
+    let rows = '', totals = new Array(7).fill(0), grandTotal = 0
+
+    for (const team of teams) {
+        const te = employees.filter(e => e.team_id === team.id)
+        if (!te.length) continue
+        rows += `<tr class="team-row"><td colspan="9">${team.name}</td></tr>`
+        for (const emp of te) {
+            const ea = (att || []).filter(r => r.employee_id === emp.id)
+            let weekSum = 0
+            const cells = days.map((d, i) => {
+                const ds   = d.toLocaleDateString('sv-SE')
+                const recs = ea.filter(r => r.date === ds).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
+                const m    = calcMins(recs)
+                weekSum   += m; totals[i] += m
+                return `<td style="text-align:center">${m > 0 ? toHHMM(m) : '-'}</td>`
+            }).join('')
+            grandTotal += weekSum
+            rows += `<tr><td>${emp.name}</td>${cells}<td style="text-align:center;font-weight:700">${weekSum > 0 ? toHHMM(weekSum) : '-'}</td></tr>`
+        }
+    }
+
+    const totalCells = totals.map(m => `<td style="text-align:center">${m > 0 ? toHHMM(m) : '-'}</td>`).join('')
+    rows += `<tr class="total-row"><td>合計</td>${totalCells}<td style="text-align:center">${toHHMM(grandTotal)}</td></tr>`
+
+    document.getElementById('weekly-tbl').innerHTML = `
+        <table>
+            <thead><tr><th>名前</th>${dayHdrs}<th style="text-align:center">週合計</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`
+}
+
+function changeWeek(d) { weekOffset += d; loadWeekly() }
+
+// ---- シフト表 ----
+async function loadShifts() {
+    const days = getWeekDays(shiftWeekOffset)
+    const from = days[0].toLocaleDateString('sv-SE')
+    const to   = days[6].toLocaleDateString('sv-SE')
+    document.getElementById('shift-week-label').textContent =
+        `${days[0].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})} 〜 ${days[6].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})}`
+
+    const { data: shifts } = await db.from('shifts').select('*').gte('date', from).lte('date', to)
+    shiftData = {}
+    for (const s of shifts || []) shiftData[`${s.employee_id}_${s.date}`] = s
+
+    const dayHdrs = days.map(d =>
+        `<th style="text-align:center;font-size:12px">${['日','月','火','水','木','金','土'][d.getDay()]}<br>${d.getDate()}日</th>`
+    ).join('')
+
+    let rows = ''
+    for (const team of teams) {
+        const te = employees.filter(e => e.team_id === team.id)
+        if (!te.length) continue
+        rows += `<tr class="team-row"><td colspan="8" style="padding:8px 12px">${team.name}</td></tr>`
+        for (const emp of te) {
+            const cells = days.map(d => {
+                const ds  = d.toLocaleDateString('sv-SE')
+                const key = `${emp.id}_${ds}`
+                const sh  = shiftData[key]
+                return `<td style="padding:6px;text-align:center">
+                    <input class="shift-input" type="time" data-emp="${emp.id}" data-date="${ds}" data-field="start_time" value="${sh?.start_time||''}">
+                    <br><small>〜</small><br>
+                    <input class="shift-input" type="time" data-emp="${emp.id}" data-date="${ds}" data-field="end_time" value="${sh?.end_time||''}">
+                </td>`
+            }).join('')
+            rows += `<tr><td style="white-space:nowrap;font-weight:500;padding:8px 12px">${emp.name}</td>${cells}</tr>`
+        }
+    }
+
+    document.getElementById('shift-tbl').innerHTML = `
+        <table style="background:white;border-radius:12px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.07)">
+            <thead><tr><th>名前</th>${dayHdrs}</tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`
+}
+
+async function saveShifts() {
+    const inputs  = document.querySelectorAll('.shift-input')
+    const updates = {}
+    for (const inp of inputs) {
+        const key = `${inp.dataset.emp}_${inp.dataset.date}`
+        if (!updates[key]) updates[key] = { employee_id: inp.dataset.emp, date: inp.dataset.date }
+        updates[key][inp.dataset.field] = inp.value || null
+    }
+    for (const key of Object.keys(updates)) {
+        const u = updates[key]
+        if (!u.start_time && !u.end_time) continue
+        const ex = shiftData[key]
+        if (ex) await db.from('shifts').update({ start_time: u.start_time, end_time: u.end_time }).eq('id', ex.id)
+        else    await db.from('shifts').insert(u)
+    }
+    alert('シフトを保存しました！')
+    loadShifts()
+}
+
+function changeShiftWeek(d) { shiftWeekOffset += d; loadShifts() }
+
+// ---- 職員管理 ----
+function renderEmployees() {
+    document.getElementById('new-team').innerHTML =
+        teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('')
+
+    let html = ''
+    for (const team of teams) {
+        const te = employees.filter(e => e.team_id === team.id)
+        if (!te.length) continue
+        html += `<div style="font-size:12px;font-weight:700;color:#6b7280;margin:16px 0 8px">${team.name}</div>`
+        for (const emp of te) {
+            html += `<div class="emp-card">
+                <div class="emp-info">
+                    <div class="name">${emp.name}</div>
+                    <div class="team-lbl">${emp.teams?.name || ''}</div>
+                </div>
+                <div class="emp-actions">
+                    <button class="btn btn-danger btn-sm" onclick="deleteEmployee('${emp.id}','${emp.name}')">削除</button>
+                </div>
+            </div>`
+        }
+    }
+    if (!html) html = '<div class="loading">職員が登録されていません</div>'
+    document.getElementById('emp-list-admin').innerHTML = html
+}
+
+async function addEmployee() {
+    const name   = document.getElementById('new-name').value.trim()
+    const teamId = parseInt(document.getElementById('new-team').value)
+    if (!name) return showMsg('emp-msg', '名前を入力してください', false)
+    const { error } = await db.from('employees').insert({ name, team_id: teamId })
+    if (error) return showMsg('emp-msg', 'エラー: ' + error.message, false)
+    document.getElementById('new-name').value = ''
+    showMsg('emp-msg', name + ' を追加しました', true)
+    await loadMaster()
+    renderEmployees()
+}
+
+async function deleteEmployee(id, name) {
+    if (!confirm(name + ' を削除しますか？')) return
+    await db.from('employees').update({ active: false }).eq('id', id)
+    await loadMaster()
+    renderEmployees()
+}
+
+// ---- QRコード ----
+function renderQR() {
+    const base = location.origin + location.pathname.replace('admin.html', 'index.html')
+    let html = ''
+    for (const emp of employees) {
+        const url    = `${base}?id=${emp.id}`
+        const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(url)}`
+        const tname  = teams.find(t => t.id === emp.team_id)?.name || ''
+        html += `<div class="qr-card">
+            <div class="name">${emp.name}</div>
+            <div class="team-lbl">${tname}</div>
+            <img src="${qrUrl}" alt="QR ${emp.name}" loading="lazy">
+        </div>`
+    }
+    document.getElementById('qr-grid').innerHTML = html || '<div class="loading">職員が登録されていません</div>'
+}
+
+// ---- ヘルパー ----
+function calcMins(records) {
+    let ci = null, bs = null, brk = 0, result = 0
+    const sorted = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
+    for (const r of sorted) {
+        const t = new Date(r.timestamp)
+        if (r.type === 'clock_in')                    ci = t
+        else if (r.type === 'break_start')             bs = t
+        else if (r.type === 'break_end' && bs)       { brk += (t-bs)/60000; bs = null }
+        else if (r.type === 'clock_out' && ci)         result = (t-ci)/60000 - brk
+    }
+    if (ci && result === 0) result = (new Date()-ci)/60000 - brk
+    return Math.max(0, Math.round(result))
+}
+
+function toHHMM(mins) {
+    return `${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}`
+}
+
+function showMsg(id, text, ok) {
+    const el = document.getElementById(id)
+    el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err')
+    el.textContent = text
+    el.classList.remove('hidden')
+    setTimeout(() => el.classList.add('hidden'), 3000)
+}
+
+document.getElementById('rec-date').value = new Date().toLocaleDateString('sv-SE')
+</script>
+</body>
+</html>

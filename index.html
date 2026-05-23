@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>打刻システム</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif; background: #f0f4f8; min-height: 100vh; }
+
+        header { background: linear-gradient(135deg, #1d4ed8, #3b82f6); color: white; padding: 16px; text-align: center; }
+        header h1 { font-size: 22px; font-weight: 700; }
+        header small { font-size: 13px; opacity: 0.8; display: block; margin-top: 4px; }
+
+        .wrap { max-width: 480px; margin: 0 auto; padding: 16px; }
+
+        .team-hd { font-size: 12px; font-weight: 700; color: #6b7280; letter-spacing: 1px; margin: 20px 0 8px 4px; }
+
+        .emp-row {
+            background: white; border-radius: 14px; padding: 16px 18px; margin-bottom: 10px;
+            cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 1px 6px rgba(0,0,0,.07); border: 2px solid transparent;
+            -webkit-tap-highlight-color: transparent; transition: border-color .15s;
+        }
+        .emp-row:active { border-color: #3b82f6; transform: scale(.98); }
+        .emp-row .name { font-size: 18px; font-weight: 600; }
+        .badge { font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 500; }
+        .b-none  { background: #f3f4f6; color: #9ca3af; }
+        .b-work  { background: #dcfce7; color: #15803d; }
+        .b-break { background: #fef9c3; color: #92400e; }
+        .b-done  { background: #f1f5f9; color: #64748b; }
+
+        .back-btn { background: none; border: none; color: #3b82f6; font-size: 15px; font-weight: 500; cursor: pointer; padding: 8px 0 16px; }
+
+        .sel-card { background: white; border-radius: 16px; padding: 20px; text-align: center; margin-bottom: 20px; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+        .sel-name { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
+        .sel-status { color: #6b7280; font-size: 14px; }
+
+        .act-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .act-btn { padding: 28px 8px; border: none; border-radius: 18px; font-size: 17px; font-weight: 700; cursor: pointer; line-height: 1.5; transition: transform .15s; }
+        .act-btn:active { transform: scale(.95); }
+        .act-btn:disabled { opacity: .2; cursor: not-allowed; transform: none; }
+        .a-ci { background: #dcfce7; color: #15803d; }
+        .a-bs { background: #fef9c3; color: #92400e; }
+        .a-be { background: #dbeafe; color: #1e40af; }
+        .a-co { background: #fee2e2; color: #b91c1c; }
+
+        .ok-wrap { text-align: center; padding: 48px 20px; }
+        .ok-icon { font-size: 72px; margin-bottom: 12px; }
+        .ok-act  { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+        .ok-who  { color: #6b7280; margin-bottom: 4px; }
+        .ok-time { font-size: 48px; font-weight: 700; color: #3b82f6; margin-bottom: 32px; }
+        .ok-btn  { padding: 14px 40px; background: #3b82f6; color: white; border: none; border-radius: 14px; font-size: 17px; font-weight: 600; cursor: pointer; }
+
+        .admin-lnk { text-align: center; margin-top: 32px; padding-bottom: 24px; }
+        .admin-lnk a { color: #d1d5db; font-size: 12px; text-decoration: none; }
+
+        .err { background: #fef2f2; color: #b91c1c; border-radius: 12px; padding: 14px; margin: 12px 0; font-size: 14px; }
+        .loading { text-align: center; color: #9ca3af; padding: 40px; font-size: 16px; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>打刻システム</h1>
+    <small id="hd-date"></small>
+</header>
+
+<div class="wrap">
+    <!-- 画面1: 職員一覧 -->
+    <div id="v-list">
+        <div id="emp-list"><div class="loading">読み込み中…</div></div>
+        <div class="admin-lnk"><a href="admin.html">管理画面</a></div>
+    </div>
+
+    <!-- 画面2: 打刻ボタン -->
+    <div id="v-act" class="hidden">
+        <button class="back-btn" onclick="goList()">← 戻る</button>
+        <div class="sel-card">
+            <div class="sel-name" id="sel-name"></div>
+            <div class="sel-status" id="sel-st"></div>
+        </div>
+        <div class="act-grid">
+            <button class="act-btn a-ci" id="b-ci" onclick="rec('clock_in')">🟢<br>出勤</button>
+            <button class="act-btn a-bs" id="b-bs" onclick="rec('break_start')">☕<br>休憩イン</button>
+            <button class="act-btn a-be" id="b-be" onclick="rec('break_end')">🔵<br>休憩アウト</button>
+            <button class="act-btn a-co" id="b-co" onclick="rec('clock_out')">🔴<br>退勤</button>
+        </div>
+    </div>
+
+    <!-- 画面3: 完了 -->
+    <div id="v-ok" class="hidden">
+        <div class="ok-wrap">
+            <div class="ok-icon">✅</div>
+            <div class="ok-act" id="ok-act"></div>
+            <div class="ok-who" id="ok-who"></div>
+            <div class="ok-time" id="ok-time"></div>
+            <button class="ok-btn" onclick="goList()">トップへ戻る</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// =============================================
+// 設定：YOUR_ANON_KEY_HERE を自分のキーに変える
+const SUPABASE_URL = 'https://afqhuswlhgcqaduyppja.supabase.co'
+const SUPABASE_KEY = 'YOUR_ANON_KEY_HERE'
+// =============================================
+
+const { createClient } = window.supabase
+const db = createClient(SUPABASE_URL, SUPABASE_KEY)
+
+let emps = [], teams = [], todaySt = {}, selEmp = null
+
+const ST = {
+    clock_in: '勤務中',
+    break_start: '休憩中',
+    break_end: '勤務中（休憩後）',
+    clock_out: '退勤済み'
+}
+const AL = {
+    clock_in: '出勤',
+    break_start: '休憩イン',
+    break_end: '休憩アウト',
+    clock_out: '退勤'
+}
+
+function todayStr() { return new Date().toLocaleDateString('sv-SE') }
+
+async function init() {
+    document.getElementById('hd-date').textContent =
+        new Date().toLocaleDateString('ja-JP', { year:'numeric', month:'long', day:'numeric', weekday:'short' })
+    try {
+        const [tr, er, ar] = await Promise.all([
+            db.from('teams').select('*').order('id'),
+            db.from('employees').select('*,teams(name)').eq('active', true).order('name'),
+            db.from('attendance').select('employee_id,type').eq('date', todayStr()).order('timestamp', { ascending: false })
+        ])
+        teams = tr.data || []
+        emps  = er.data || []
+        todaySt = {}
+        for (const r of ar.data || []) {
+            if (!todaySt[r.employee_id]) todaySt[r.employee_id] = r.type
+        }
+        renderList()
+    } catch(e) {
+        document.getElementById('emp-list').innerHTML = `<div class="err">読み込みエラー: ${e.message}</div>`
+    }
+}
+
+function renderList() {
+    let h = ''
+    for (const t of teams) {
+        const te = emps.filter(e => e.team_id === t.id)
+        if (!te.length) continue
+        h += `<div class="team-hd">${t.name}</div>`
+        for (const e of te) {
+            const s = todaySt[e.id]
+            let cls = 'b-none', lb = '未打刻'
+            if (s === 'clock_in' || s === 'break_end') { cls = 'b-work';  lb = ST[s] }
+            else if (s === 'break_start')               { cls = 'b-break'; lb = ST[s] }
+            else if (s === 'clock_out')                 { cls = 'b-done';  lb = ST[s] }
+            h += `<div class="emp-row" onclick="selEmpFn('${e.id}')">
+                    <span class="name">${e.name}</span>
+                    <span class="badge ${cls}">${lb}</span>
+                  </div>`
+        }
+    }
+    if (!h) h = '<div class="loading">職員が登録されていません。<br>管理画面から追加してください。</div>'
+    document.getElementById('emp-list').innerHTML = h
+
+    // URLパラメータ ?id=xxx で職員を自動選択（QRコード用）
+    const pid = new URLSearchParams(location.search).get('id')
+    if (pid) selEmpFn(pid)
+}
+
+function selEmpFn(id) {
+    selEmp = emps.find(e => e.id === id)
+    if (!selEmp) return
+    const s = todaySt[id]
+    document.getElementById('sel-name').textContent = selEmp.name
+    document.getElementById('sel-st').textContent   = '現在: ' + (ST[s] || '未打刻')
+    document.getElementById('b-ci').disabled = !!s
+    document.getElementById('b-bs').disabled = s !== 'clock_in' && s !== 'break_end'
+    document.getElementById('b-be').disabled = s !== 'break_start'
+    document.getElementById('b-co').disabled = !s || s === 'clock_out'
+    show('v-act')
+}
+
+async function rec(type) {
+    try {
+        await db.from('attendance').insert({ employee_id: selEmp.id, type, date: todayStr() })
+        todaySt[selEmp.id] = type
+        const now = new Date()
+        document.getElementById('ok-act').textContent  = AL[type] + 'しました'
+        document.getElementById('ok-who').textContent  = selEmp.name
+        document.getElementById('ok-time').textContent = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' })
+        show('v-ok')
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+function goList() { renderList(); show('v-list') }
+
+function show(id) {
+    ['v-list','v-act','v-ok'].forEach(v =>
+        document.getElementById(v).classList.toggle('hidden', v !== id)
+    )
+}
+
+init()
+</script>
+</body>
+</html>
