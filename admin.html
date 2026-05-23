@@ -94,9 +94,18 @@
         .print-note { display: none; font-size: 12px; color: #666; text-align: right; margin-bottom: 8px; }
 
         @media print {
-            header, .tabs, .sec-hd .btn, .sec-hd .week-nav button, .form-row, .hd-btn { display: none !important; }
+            @page { size: A4 landscape; margin: 8mm; }
+            header, .tabs, .sec-hd .btn, .sec-hd select, .form-row, .hd-btn,
+            #shift-legend, .sec-hd .week-nav button { display: none !important; }
             .print-note { display: block !important; }
             body { background: white; }
+            .content { padding: 0 !important; }
+            #shift-tbl-monthly table { font-size: 9pt !important; width: 100% !important; }
+            #shift-tbl-monthly td, #shift-tbl-monthly th {
+                padding: 2px 1px !important; font-size: 9pt !important;
+            }
+            #shift-tbl-monthly { overflow: visible !important; }
+            #shift-tbl-monthly div { overflow: visible !important; }
         }
 
         .hidden { display: none !important; }
@@ -495,10 +504,10 @@ async function loadShiftsMonthly() {
         days.push({ d, dow: date.getDay(), ds: `${month}-${String(d).padStart(2,'0')}` })
     }
 
-    let hdr = '<th style="min-width:64px;position:sticky;left:0;background:#f8fafc;z-index:2">名前</th>'
+    let hdr = '<th style="min-width:72px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:13px">名前</th>'
     for (const { d, dow } of days) {
         const bg = dow===0 ? '#fee2e2' : dow===6 ? '#fef3c7' : '#f8fafc'
-        hdr += `<th style="background:${bg};min-width:28px;text-align:center;font-size:10px;padding:3px 1px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
+        hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
     }
 
     let rows = '', curTeam = null
@@ -516,7 +525,7 @@ async function loadShiftsMonthly() {
             const bg = SHIFT_COLORS[st] || '#fff'
             const empId = emp.id
             cells += `<td onclick="cycleShift('${empId}','${ds}','${st}')"
-                style="background:${bg};text-align:center;font-size:10px;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0">${st}</td>`
+                style="background:${bg};text-align:center;font-size:12px;cursor:pointer;padding:3px 2px;border:1px solid #f0f0f0">${st}</td>`
         }
         rows += `<tr>${cells}</tr>`
     }
