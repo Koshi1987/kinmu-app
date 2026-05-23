@@ -108,13 +108,27 @@
             <label>日付</label>
             <input type="date" id="req-date">
             <label>変更内容</label>
-            <select id="req-type">
+            <select id="req-type" onchange="toggleHours()">
                 <option value="有給">有給（全日）</option>
                 <option value="AM有休">AM有休（午前休）</option>
                 <option value="PM有休">PM有休（午後休）</option>
+                <option value="時間有給">時間有給（1時間〜）</option>
                 <option value="研修">研修</option>
                 <option value="休">休み</option>
             </select>
+            <div id="hours-row" style="display:none">
+                <label>使用時間数</label>
+                <select id="req-hours">
+                    <option value="1">1時間</option>
+                    <option value="2">2時間</option>
+                    <option value="3">3時間</option>
+                    <option value="4">4時間</option>
+                    <option value="5">5時間</option>
+                    <option value="6">6時間</option>
+                    <option value="7">7時間</option>
+                    <option value="8">8時間</option>
+                </select>
+            </div>
             <label>理由・コメント（任意）</label>
             <textarea id="req-reason" placeholder="例：外部研修のため、通院のため など"></textarea>
             <button class="req-submit" onclick="submitRequest()">申請する</button>
@@ -249,14 +263,21 @@ function goReq() {
     show('v-req')
 }
 
+function toggleHours() {
+    const type = document.getElementById('req-type').value
+    document.getElementById('hours-row').style.display = type === '時間有給' ? 'block' : 'none'
+}
+
 async function submitRequest() {
     const date   = document.getElementById('req-date').value
     const type   = document.getElementById('req-type').value
     const reason = document.getElementById('req-reason').value
+    const hours  = type === '時間有給' ? parseInt(document.getElementById('req-hours').value) : 0
     if (!date) return alert('日付を選択してください')
     try {
         await db.from('shift_requests').insert({
-            employee_id: selEmp.id, date, requested_type: type, reason
+            employee_id: selEmp.id, date, requested_type: type, reason,
+            requested_hours: hours
         })
         document.getElementById('ok-act').textContent  = 'シフト変更申請を送りました'
         document.getElementById('ok-who').textContent  = selEmp.name + '　' + date + '　' + type

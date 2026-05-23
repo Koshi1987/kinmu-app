@@ -253,6 +253,7 @@
                 <span style="background:#dcfce7;padding:3px 10px;border-radius:4px">有給</span>
                 <span style="background:#bbf7d0;padding:3px 10px;border-radius:4px">AM有休</span>
                 <span style="background:#a7f3d0;padding:3px 10px;border-radius:4px">PM有休</span>
+                <span style="background:#d1fae5;padding:3px 10px;border-radius:4px">時間有給</span>
                 <span style="background:#fde68a;padding:3px 10px;border-radius:4px">研修</span>
                 <span style="background:#f3f4f6;padding:3px 10px;border-radius:4px">休</span>
                 <small style="color:#9ca3af;padding:3px 0">（セルをクリックで変更）</small>
@@ -315,16 +316,16 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 let employees = [], teams = []
 let weekOffset = 0, shiftMonthOffset = 0
 
-const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','研修','休']
+const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','時間有給','研修','休']
 const SHIFT_COLORS = {
     '日勤':'#dbeafe', '午前':'#fff3e0', '午後':'#fce7f3',
     '変則':'#f3e5f5', '春夏':'#fce4ec', '有給':'#dcfce7',
-    'AM有休':'#bbf7d0', 'PM有休':'#a7f3d0', '研修':'#fde68a', '休':'#f3f4f6'
+    'AM有休':'#bbf7d0', 'PM有休':'#a7f3d0', '時間有給':'#d1fae5', '研修':'#fde68a', '休':'#f3f4f6'
 }
 // 各シフトの所定労働時間（時間）
 const SHIFT_HOURS = {
     '日勤':8, '午前':4.5, '午後':4, '変則':7, '春夏':6.5,
-    '有給':8, 'AM有休':8, 'PM有休':8, '研修':8, '休':0
+    '有給':8, 'AM有休':8, 'PM有休':8, '時間有給':8, '研修':8, '休':0
 }
 
 // ---- パスワード ----
@@ -721,7 +722,7 @@ async function loadRequests() {
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
                     <div>
                         <div style="font-size:16px;font-weight:600">${r.employees?.name || '-'}</div>
-                        <div style="font-size:13px;color:#6b7280;margin-top:4px">${r.date}　<span style="background:#fde68a;padding:2px 8px;border-radius:4px;font-weight:600">${r.requested_type}</span></div>
+                        <div style="font-size:13px;color:#6b7280;margin-top:4px">${r.date}　<span style="background:#fde68a;padding:2px 8px;border-radius:4px;font-weight:600">${r.requested_type}${r.requested_hours > 0 ? '　' + r.requested_hours + '時間' : ''}</span></div>
                         ${r.reason ? `<div style="font-size:13px;color:#374151;margin-top:6px">💬 ${r.reason}</div>` : ''}
                         <div style="font-size:11px;color:#9ca3af;margin-top:6px">${new Date(r.created_at).toLocaleString('ja-JP')}</div>
                     </div>
@@ -746,7 +747,7 @@ async function loadRequests() {
             html += `<div style="background:white;border-radius:10px;padding:12px 16px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.05);opacity:0.7;display:flex;justify-content:space-between;align-items:center">
                 <div>
                     <span style="font-weight:600">${r.employees?.name || '-'}</span>
-                    <span style="font-size:13px;color:#6b7280;margin-left:10px">${r.date}　${r.requested_type}</span>
+                    <span style="font-size:13px;color:#6b7280;margin-left:10px">${r.date}　${r.requested_type}${r.requested_hours > 0 ? ' ' + r.requested_hours + '時間' : ''}</span>
                     ${r.reason ? `<span style="font-size:12px;color:#9ca3af;margin-left:8px">${r.reason}</span>` : ''}
                 </div>
                 <span style="font-size:13px;font-weight:600;color:${col}">${lbl}</span>
