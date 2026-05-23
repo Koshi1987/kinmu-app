@@ -56,6 +56,13 @@
         .admin-lnk { text-align: center; margin-top: 32px; padding-bottom: 24px; }
         .admin-lnk a { color: #d1d5db; font-size: 12px; text-decoration: none; }
 
+        .req-btn { width: 100%; margin-top: 16px; padding: 14px; background: white; color: #6b7280; border: 1.5px solid #e5e7eb; border-radius: 14px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .req-form { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+        .req-form label { font-size: 13px; color: #6b7280; display: block; margin-bottom: 6px; }
+        .req-form select, .req-form input[type="date"], .req-form textarea { width: 100%; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 16px; margin-bottom: 16px; font-family: inherit; }
+        .req-form textarea { height: 80px; resize: none; }
+        .req-submit { width: 100%; padding: 16px; background: #1d4ed8; color: white; border: none; border-radius: 14px; font-size: 17px; font-weight: 700; cursor: pointer; margin-top: 4px; }
+
         .err { background: #fef2f2; color: #b91c1c; border-radius: 12px; padding: 14px; margin: 12px 0; font-size: 14px; }
         .loading { text-align: center; color: #9ca3af; padding: 40px; font-size: 16px; }
         .hidden { display: none !important; }
@@ -87,9 +94,34 @@
             <button class="act-btn a-be" id="b-be" onclick="rec('break_end')">🔵<br>休憩アウト</button>
             <button class="act-btn a-co" id="b-co" onclick="rec('clock_out')">🔴<br>退勤</button>
         </div>
+        <button class="req-btn" onclick="goReq()">📝 シフト変更申請</button>
     </div>
 
-    <!-- 画面3: 完了 -->
+    <!-- 画面3: シフト変更申請 -->
+    <div id="v-req" class="hidden">
+        <button class="back-btn" onclick="show('v-act')">← 戻る</button>
+        <div class="sel-card">
+            <div class="sel-name" id="req-name"></div>
+            <div class="sel-status">シフト変更申請</div>
+        </div>
+        <div class="req-form">
+            <label>日付</label>
+            <input type="date" id="req-date">
+            <label>変更内容</label>
+            <select id="req-type">
+                <option value="有給">有給（全日）</option>
+                <option value="AM有休">AM有休（午前休）</option>
+                <option value="PM有休">PM有休（午後休）</option>
+                <option value="研修">研修</option>
+                <option value="休">休み</option>
+            </select>
+            <label>理由・コメント（任意）</label>
+            <textarea id="req-reason" placeholder="例：外部研修のため、通院のため など"></textarea>
+            <button class="req-submit" onclick="submitRequest()">申請する</button>
+        </div>
+    </div>
+
+    <!-- 画面4: 完了 -->
     <div id="v-ok" class="hidden">
         <div class="ok-wrap">
             <div class="ok-icon">✅</div>
@@ -203,9 +235,34 @@ async function rec(type) {
 function goList() { renderList(); show('v-list') }
 
 function show(id) {
-    ['v-list','v-act','v-ok'].forEach(v =>
+    ['v-list','v-act','v-req','v-ok'].forEach(v =>
         document.getElementById(v).classList.toggle('hidden', v !== id)
     )
+}
+
+function goReq() {
+    document.getElementById('req-name').textContent = selEmp.name
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    document.getElementById('req-date').value = tomorrow.toLocaleDateString('sv-SE')
+    document.getElementById('req-reason').value = ''
+    show('v-req')
+}
+
+async function submitRequest() {
+    const date   = document.getElementById('req-date').value
+    const type   = document.getElementById('req-type').value
+    const reason = document.getElementById('req-reason').value
+    if (!date) return alert('日付を選択してください')
+    try {
+        await db.from('shift_requests').insert({
+            employee_id: selEmp.id, date, requested_type: type, reason
+        })
+        document.getElementById('ok-act').textContent  = 'シフト変更申請を送りました'
+        document.getElementById('ok-who').textContent  = selEmp.name + '　' + date + '　' + type
+        document.getElementById('ok-time').textContent = '申請完了 ✓'
+        show('v-ok')
+    } catch(e) { alert('エラー: ' + e.message) }
 }
 
 init()

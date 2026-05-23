@@ -170,6 +170,7 @@
         <div class="tab active"  onclick="switchTab('today')">📊 今日の状況</div>
         <div class="tab"         onclick="switchTab('records')">📅 勤務記録</div>
         <div class="tab"         onclick="switchTab('shifts')">シフト表</div>
+        <div class="tab"         onclick="switchTab('requests')" id="tab-btn-requests">📬 申請確認</div>
         <div class="tab"         onclick="switchTab('employees')">👥 職員管理</div>
         <div class="tab"         onclick="switchTab('qr')">📱 QRコード</div>
     </div>
@@ -259,6 +260,15 @@
             <div id="shift-tbl-monthly"></div>
         </div>
 
+        <!-- 申請確認 -->
+        <div id="tab-requests" class="hidden">
+            <div class="sec-hd">
+                <span class="sec-title">シフト変更申請</span>
+                <button class="btn btn-ghost" onclick="loadRequests()">🔄 更新</button>
+            </div>
+            <div id="req-list"><div class="loading">読み込み中…</div></div>
+        </div>
+
         <!-- 職員管理 -->
         <div id="tab-employees" class="hidden">
             <div class="add-form">
@@ -341,7 +351,7 @@ async function loadMaster() {
 
 // ---- タブ切り替え ----
 function switchTab(name) {
-    const names = ['today','records','shifts','employees','qr']
+    const names = ['today','records','shifts','requests','employees','qr']
     document.querySelectorAll('.tab').forEach((t, i) =>
         t.classList.toggle('active', names[i] === name)
     )
@@ -353,6 +363,7 @@ function switchTab(name) {
     if (name === 'employees') renderEmployees()
     if (name === 'qr')        renderQR()
     if (name === 'shifts')    loadShiftsMonthly()
+    if (name === 'requests')  loadRequests()
 }
 
 function switchRecordTab(name) {
@@ -690,6 +701,84 @@ async function deleteEmployee(id, name) {
     await db.from('employees').update({ active: false }).eq('id', id)
     await loadMaster()
     renderEmployees()
+}
+
+// ---- 申請確認 ----
+async function loadRequests() {
+    const { data } = await db.from('shift_requests')
+        .select('*, employees(name)')
+        .order('created_at', { ascending: false })
+
+    const pending = (data || []).filter(r => r.status === 'pending')
+    const done    = (data || []).filter(r => r.status !== 'pending')
+
+    let html = ''
+
+    if (pending.length) {
+        html += `<div style="font-size:13px;font-weight:700;color:#92400e;margin-bottom:12px">⏳ 未確認（${pending.length}件）</div>`
+        for (const r of pending) {
+            html += `<div style="background:white;border-radius:12px;padding:16px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-left:4px solid #f59e0b">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+                    <div>
+                        <div style="font-size:16px;font-weight:600">${r.employees?.name || '-'}</div>
+                        <div style="font-size:13px;color:#6b7280;margin-top:4px">${r.date}　<span style="background:#fde68a;padding:2px 8px;border-radius:4px;font-weight:600">${r.requested_type}</span></div>
+                        ${r.reason ? `<div style="font-size:13px;color:#374151;margin-top:6px">💬 ${r.reason}</div>` : ''}
+                        <div style="font-size:11px;color:#9ca3af;margin-top:6px">${new Date(r.created_at).toLocaleString('ja-JP')}</div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0">
+                        <button onclick="approveRequest('${r.id}','${r.employee_id}','${r.date}','${r.requested_type}')"
+                            style="padding:8px 16px;background:#dcfce7;color:#15803d;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認</button>
+                        <button onclick="rejectRequest('${r.id}')"
+                            style="padding:8px 16px;background:#fee2e2;color:#b91c1c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✗ 却下</button>
+                    </div>
+                </div>
+            </div>`
+        }
+    } else {
+        html += '<div style="background:#f0fdf4;border-radius:12px;padding:20px;text-align:center;color:#15803d;font-weight:600;margin-bottom:16px">✓ 未確認の申請はありません</div>'
+    }
+
+    if (done.length) {
+        html += `<div style="font-size:13px;font-weight:700;color:#6b7280;margin:20px 0 12px">確認済み（直近20件）</div>`
+        for (const r of done.slice(0, 20)) {
+            const col  = r.status === 'approved' ? '#15803d' : '#b91c1c'
+            const lbl  = r.status === 'approved' ? '✓ 承認済' : '✗ 却下'
+            html += `<div style="background:white;border-radius:10px;padding:12px 16px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.05);opacity:0.7;display:flex;justify-content:space-between;align-items:center">
+                <div>
+                    <span style="font-weight:600">${r.employees?.name || '-'}</span>
+                    <span style="font-size:13px;color:#6b7280;margin-left:10px">${r.date}　${r.requested_type}</span>
+                    ${r.reason ? `<span style="font-size:12px;color:#9ca3af;margin-left:8px">${r.reason}</span>` : ''}
+                </div>
+                <span style="font-size:13px;font-weight:600;color:${col}">${lbl}</span>
+            </div>`
+        }
+    }
+
+    document.getElementById('req-list').innerHTML = html || '<div class="loading">申請はありません</div>'
+
+    // タブに未確認バッジを表示
+    const btn = document.getElementById('tab-btn-requests')
+    btn.textContent = pending.length ? `📬 申請確認（${pending.length}）` : '📬 申請確認'
+}
+
+async function approveRequest(id, empId, date, type) {
+    if (!confirm(`${date} の ${type} を承認してシフト表に反映しますか？`)) return
+    try {
+        const { data: ex } = await db.from('shifts').select('id').eq('employee_id', empId).eq('date', date)
+        if (ex && ex.length > 0) {
+            await db.from('shifts').update({ shift_type: type }).eq('id', ex[0].id)
+        } else {
+            await db.from('shifts').insert({ employee_id: empId, date, shift_type: type })
+        }
+        await db.from('shift_requests').update({ status: 'approved' }).eq('id', id)
+        loadRequests()
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+async function rejectRequest(id) {
+    if (!confirm('この申請を却下しますか？')) return
+    await db.from('shift_requests').update({ status: 'rejected' }).eq('id', id)
+    loadRequests()
 }
 
 // ---- QRコード ----
