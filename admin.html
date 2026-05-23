@@ -318,7 +318,7 @@ async function loadMaster() {
 
 // ---- タブ切り替え ----
 function switchTab(name) {
-    const names = ['today','records','weekly','shifts','employees','qr','monthly']
+    const names = ['today','records','weekly','monthly','shifts','employees','qr']
     document.querySelectorAll('.tab').forEach((t, i) =>
         t.classList.toggle('active', names[i] === name)
     )
@@ -540,7 +540,8 @@ async function loadShiftsMonthly() {
             const tn = teams.find(t => t.id === curTeam)?.name || ''
             rows += `<tr class="team-row"><td colspan="${lastDay+1}">${tn}</td></tr>`
         }
-        let cells = `<td style="white-space:normal;word-break:break-all;font-weight:600;position:sticky;left:0;background:white;z-index:1;padding:5px 8px;font-size:13px;min-width:64px;max-width:80px;line-height:1.4">${emp.name}${emp.role ? `<br><span style="font-size:10px;font-weight:400;color:#6b7280;line-height:1.3">${emp.role}</span>` : ''}</td>`
+        const roleTag = (teamFilter !== 'all' && emp.role) ? `<br><span style="font-size:10px;font-weight:400;color:#6b7280;line-height:1.3">${emp.role}</span>` : ''
+        let cells = `<td style="white-space:normal;word-break:break-all;font-weight:600;position:sticky;left:0;background:white;z-index:1;padding:5px 8px;font-size:13px;min-width:64px;max-width:80px;line-height:1.4">${emp.name}${roleTag}</td>`
         for (const { dow, ds } of days) {
             const key = `${emp.id}_${ds}`
             const isWknd = dow===0 || dow===6
