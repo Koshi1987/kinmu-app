@@ -242,7 +242,7 @@ function checkPw() {
 async function loadMaster() {
     const [tr, er] = await Promise.all([
         db.from('teams').select('*').order('id'),
-        db.from('employees').select('*,teams(name)').eq('active', true).order('name')
+        db.from('employees').select('*,teams(name)').eq('active', true).order('sort_order')
     ])
     teams     = tr.data || []
     employees = er.data || []
@@ -471,6 +471,8 @@ function renderEmployees() {
                     <div class="team-lbl">${emp.teams?.name || ''}</div>
                 </div>
                 <div class="emp-actions">
+                    <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',-1)">↑</button>
+                    <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',1)">↓</button>
                     <button class="btn btn-danger btn-sm" onclick="deleteEmployee('${emp.id}','${emp.name}')">削除</button>
                 </div>
             </div>`
@@ -488,6 +490,20 @@ async function addEmployee() {
     if (error) return showMsg('emp-msg', 'エラー: ' + error.message, false)
     document.getElementById('new-name').value = ''
     showMsg('emp-msg', name + ' を追加しました', true)
+    await loadMaster()
+    renderEmployees()
+}
+
+async function moveEmployee(id, dir) {
+    const allEmps = [...employees].sort((a,b) => a.sort_order - b.sort_order)
+    const idx = allEmps.findIndex(e => e.id === id)
+    const swapIdx = idx + dir
+    if (swapIdx < 0 || swapIdx >= allEmps.length) return
+    const a = allEmps[idx], b = allEmps[swapIdx]
+    await Promise.all([
+        db.from('employees').update({ sort_order: b.sort_order }).eq('id', a.id),
+        db.from('employees').update({ sort_order: a.sort_order }).eq('id', b.id)
+    ])
     await loadMaster()
     renderEmployees()
 }
