@@ -133,7 +133,7 @@
         <div class="tab"         onclick="switchTab('shifts')">🗓 シフト表</div>
         <div class="tab"         onclick="switchTab('employees')">👥 職員管理</div>
         <div class="tab"         onclick="switchTab('qr')">📱 QRコード</div>
-        <div class="tab" onclick="switchTab('monthly')">👤 月間記録</div>
+        <div class="tab"         onclick="switchTab('monthly')">👤 月間記録</div>
     </div>
 
     <div class="content">
@@ -556,6 +556,7 @@ async function deleteEmployee(id, name) {
     renderEmployees()
 }
 
+// ---- QRコード ----
 // ---- 月間個人記録 ----
 function initMonthly() {
     const sel = document.getElementById('monthly-emp')
@@ -577,7 +578,41 @@ async function loadMonthly() {
     document.getElementById('pn-monthly-emp').textContent =
         `${emp.name} ${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
     const { data } = await db.from('attendance')
-        .select('*').eq('employee_id', e
+        .select('*').eq('employee_id', empId)
+        .gte('date', from).lte('date', to).order('timestamp')
+    const byDate = {}
+    for (const r of data || []) {
+        if (!byDate[r.date]) byDate[r.date] = []
+        byDate[r.date].push(r)
+    }
+    const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
+    let rows = '', totalMins = 0
+    for (let d = 1; d <= lastDay; d++) {
+        const ds = `${month}-${String(d).padStart(2,'0')}`
+        const dayName = ['日','月','火','水','木','金','土'][new Date(ds).getDay()]
+        const recs = (byDate[ds] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
+        const ci = recs.find(r => r.type === 'clock_in')
+        const bs = recs.find(r => r.type === 'break_start')
+        const be = recs.find(r => r.type === 'break_end')
+        const co = [...recs].reverse().find(r => r.type === 'clock_out')
+        const mins = calcMins(recs)
+        totalMins += mins
+        if (!ci && !co) continue
+        const weekend = new Date(ds).getDay() === 0 || new Date(ds).getDay() === 6
+        rows += `<tr ${weekend ? 'style="color:#9ca3af"' : ''}>`
+        rows += `<td>${parseInt(mon)}/${d}（${dayName}）</td>`
+        rows += `<td>${ci ? fmt(ci.timestamp) : '-'}</td>`
+        rows += `<td>${bs ? fmt(bs.timestamp) : '-'}</td>`
+        rows += `<td>${be ? fmt(be.timestamp) : '-'}</td>`
+        rows += `<td>${co ? fmt(co.timestamp) : '-'}</td>`
+        rows += `<td>${mins > 0 ? toHHMM(mins) : '-'}</td></tr>`
+    }
+    if (!rows) rows = '<tr><td colspan="6" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    rows += `<tr class="total-row"><td>月間合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td></tr>`
+    document.getElementById('monthly-tbl').innerHTML =
+        `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th></tr></thead><tbody>${rows}</tbody></table>`
+}
+
 function renderQR() {
     const base = location.origin + location.pathname.replace('admin.html', 'index.html')
     let html = ''
