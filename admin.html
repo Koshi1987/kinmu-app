@@ -93,6 +93,12 @@
         .loading { text-align: center; color: #9ca3af; padding: 40px; }
         .print-note { display: none; font-size: 12px; color: #666; text-align: right; margin-bottom: 8px; }
 
+        /* サブタブ */
+        .sub-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; }
+        .sub-tab { padding: 10px 20px; background: none; border: none; border-bottom: 3px solid transparent; margin-bottom: -2px; font-size: 14px; font-weight: 500; color: #6b7280; cursor: pointer; transition: color .15s; }
+        .sub-tab.active { color: #1d4ed8; border-bottom-color: #1d4ed8; }
+        .sub-tab:hover:not(.active) { color: #374151; }
+
         @media print {
             @page { size: A4 landscape; margin: 6mm; }
             header, .tabs, .sec-hd .btn, .sec-hd select, .form-row, .hd-btn,
@@ -159,8 +165,6 @@
     <div class="tabs">
         <div class="tab active"  onclick="switchTab('today')">📊 今日の状況</div>
         <div class="tab"         onclick="switchTab('records')">📅 勤務記録</div>
-        <div class="tab"         onclick="switchTab('weekly')">📈 週間集計</div>
-        <div class="tab"         onclick="switchTab('monthly')">👤 月間記録</div>
         <div class="tab"         onclick="switchTab('shifts')">🗓 シフト表</div>
         <div class="tab"         onclick="switchTab('employees')">👥 職員管理</div>
         <div class="tab"         onclick="switchTab('qr')">📱 QRコード</div>
@@ -177,28 +181,46 @@
             <div class="tbl-wrap" id="today-tbl"></div>
         </div>
 
-        <!-- 勤務記録 -->
+        <!-- 勤務記録（サブタブ：日別・週間・月間） -->
         <div id="tab-records" class="hidden">
-            <div class="sec-hd"><span class="sec-title">勤務記録</span></div>
-            <div class="form-row">
-                <input type="date" id="rec-date">
-                <button class="btn btn-primary" onclick="loadRecords()">表示</button>
+            <div class="sub-tabs">
+                <button class="sub-tab active" onclick="switchRecordTab('daily')">📅 日別記録</button>
+                <button class="sub-tab"        onclick="switchRecordTab('weekly')">📈 週間集計</button>
+                <button class="sub-tab"        onclick="switchRecordTab('monthly')">👤 月間記録</button>
             </div>
-            <div id="rec-tbl"></div>
-        </div>
-
-        <!-- 週間集計 -->
-        <div id="tab-weekly" class="hidden">
-            <div class="sec-hd">
-                <span class="sec-title">週間集計</span>
-                <div class="week-nav">
-                    <button onclick="changeWeek(-1)">◀</button>
-                    <span class="week-label" id="week-label"></span>
-                    <button onclick="changeWeek(1)">▶</button>
+            <!-- 日別記録 -->
+            <div id="sub-daily">
+                <div class="sec-hd"><span class="sec-title">勤務記録</span></div>
+                <div class="form-row">
+                    <input type="date" id="rec-date">
+                    <button class="btn btn-primary" onclick="loadRecords()">表示</button>
                 </div>
+                <div id="rec-tbl"></div>
             </div>
-            <div class="print-note" id="pn-weekly"></div>
-            <div class="tbl-wrap" id="weekly-tbl"></div>
+            <!-- 週間集計 -->
+            <div id="sub-weekly" class="hidden">
+                <div class="sec-hd">
+                    <span class="sec-title">週間集計</span>
+                    <div class="week-nav">
+                        <button onclick="changeWeek(-1)">◀</button>
+                        <span class="week-label" id="week-label"></span>
+                        <button onclick="changeWeek(1)">▶</button>
+                    </div>
+                </div>
+                <div class="print-note" id="pn-weekly"></div>
+                <div class="tbl-wrap" id="weekly-tbl"></div>
+            </div>
+            <!-- 月間記録 -->
+            <div id="sub-monthly" class="hidden">
+                <div class="sec-hd"><span class="sec-title">月間個人記録</span></div>
+                <div class="form-row">
+                    <select id="monthly-emp"></select>
+                    <input type="month" id="monthly-month">
+                    <button class="btn btn-primary" onclick="loadMonthly()">表示</button>
+                </div>
+                <div class="print-note" id="pn-monthly-emp"></div>
+                <div class="tbl-wrap" id="monthly-tbl"></div>
+            </div>
         </div>
 
         <!-- シフト表 -->
@@ -249,18 +271,6 @@
             </div>
             <div class="sec-hd"><span class="sec-title">職員一覧</span></div>
             <div id="emp-list-admin"></div>
-        </div>
-
-        <!-- 月間記録 -->
-        <div id="tab-monthly" class="hidden">
-            <div class="sec-hd"><span class="sec-title">月間個人記録</span></div>
-            <div class="form-row">
-                <select id="monthly-emp"></select>
-                <input type="month" id="monthly-month">
-                <button class="btn btn-primary" onclick="loadMonthly()">表示</button>
-            </div>
-            <div class="print-note" id="pn-monthly-emp"></div>
-            <div class="tbl-wrap" id="monthly-tbl"></div>
         </div>
 
         <!-- QRコード -->
@@ -318,21 +328,29 @@ async function loadMaster() {
 
 // ---- タブ切り替え ----
 function switchTab(name) {
-    const names = ['today','records','weekly','monthly','shifts','employees','qr']
+    const names = ['today','records','shifts','employees','qr']
     document.querySelectorAll('.tab').forEach((t, i) =>
         t.classList.toggle('active', names[i] === name)
     )
     names.forEach(n =>
         document.getElementById('tab-' + n).classList.toggle('hidden', n !== name)
     )
-    // シフト表タブは全画面幅を使う、他は960px制限に戻す
     document.querySelector('.content').style.maxWidth = (name === 'shifts') ? 'none' : ''
     if (name === 'today')     loadToday()
-    if (name === 'weekly')    loadWeekly()
     if (name === 'employees') renderEmployees()
     if (name === 'qr')        renderQR()
-    if (name === 'monthly')   initMonthly()
     if (name === 'shifts')    loadShiftsMonthly()
+}
+
+function switchRecordTab(name) {
+    ['daily','weekly','monthly'].forEach(n =>
+        document.getElementById('sub-' + n).classList.toggle('hidden', n !== name)
+    )
+    document.querySelectorAll('.sub-tab').forEach((t, i) =>
+        t.classList.toggle('active', ['daily','weekly','monthly'][i] === name)
+    )
+    if (name === 'weekly')  loadWeekly()
+    if (name === 'monthly') initMonthly()
 }
 
 // ---- 今日の状況 ----
