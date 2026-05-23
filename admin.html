@@ -250,6 +250,9 @@
                 <span style="background:#f3e5f5;padding:3px 10px;border-radius:4px">変則</span>
                 <span style="background:#fce4ec;padding:3px 10px;border-radius:4px">春夏</span>
                 <span style="background:#dcfce7;padding:3px 10px;border-radius:4px">有給</span>
+                <span style="background:#bbf7d0;padding:3px 10px;border-radius:4px">AM有休</span>
+                <span style="background:#a7f3d0;padding:3px 10px;border-radius:4px">PM有休</span>
+                <span style="background:#fde68a;padding:3px 10px;border-radius:4px">研修</span>
                 <span style="background:#f3f4f6;padding:3px 10px;border-radius:4px">休</span>
                 <small style="color:#9ca3af;padding:3px 0">（セルをクリックで変更）</small>
             </div>
@@ -448,7 +451,7 @@ async function loadRecords() {
     for (const team of teams) {
         const te = employees.filter(e => e.team_id === team.id)
         if (!te.length) continue
-        rows += `<tr class="team-row"><td colspan="6">${team.name}</td></tr>`
+        rows += `<tr class="team-row"><td colspan="7">${team.name}</td></tr>`
         for (const emp of te) {
             const recs = (empAtt[emp.id] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
             const ci = recs.find(r => r.type === 'clock_in')
@@ -456,6 +459,7 @@ async function loadRecords() {
             const be = recs.find(r => r.type === 'break_end')
             const co = [...recs].reverse().find(r => r.type === 'clock_out')
             const mins = calcMins(recs)
+            const ot = calcOvertime(recs)
             rows += `<tr>
                 <td><strong>${emp.name}</strong></td>
                 <td>${ci ? fmt(ci.timestamp) : '-'}</td>
@@ -463,13 +467,14 @@ async function loadRecords() {
                 <td>${be ? fmt(be.timestamp) : '-'}</td>
                 <td>${co ? fmt(co.timestamp) : '-'}</td>
                 <td>${mins > 0 ? toHHMM(mins) : '-'}</td>
+                <td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td>
             </tr>`
         }
     }
-    if (!rows) rows = '<tr><td colspan="6" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    if (!rows) rows = '<tr><td colspan="7" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
     document.getElementById('rec-tbl').innerHTML = `
         <table>
-            <thead><tr><th>名前</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th></tr></thead>
+            <thead><tr><th>名前</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th></tr></thead>
             <tbody>${rows}</tbody>
         </table>`
 }
@@ -601,8 +606,10 @@ async function loadShiftsMonthly() {
             cells += `<td style="background:#f0fdf4;text-align:center;font-size:12px;font-weight:600;padding:3px 4px;border:1px solid #bbf7d0">${weeklyAvg}h</td>`
             rows += `<tr>${cells}</tr>`
         }
-        // チームごとの勤務時間凡例
-        rows += `<tr><td colspan="${lastDay+3}" style="font-size:11px;padding:6px 10px;background:#f8fafc;color:#374151;border-top:2px solid #cbd5e1;border-bottom:2px solid #cbd5e1;white-space:normal">${LEGEND}</td></tr>`
+        // チームごとの勤務時間凡例（チーム別表示のみ）
+        if (teamFilter !== 'all') {
+            rows += `<tr><td colspan="${lastDay+3}" style="font-size:11px;padding:6px 10px;background:#f8fafc;color:#374151;border-top:2px solid #cbd5e1;border-bottom:2px solid #cbd5e1;white-space:normal">${LEGEND}</td></tr>`
+        }
     }
 
     document.getElementById('shift-tbl-monthly').innerHTML =
@@ -715,7 +722,7 @@ async function loadMonthly() {
         byDate[r.date].push(r)
     }
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
-    let rows = '', totalMins = 0
+    let rows = '', totalMins = 0, totalOt = 0
     for (let d = 1; d <= lastDay; d++) {
         const ds = `${month}-${String(d).padStart(2,'0')}`
         const dayName = ['日','月','火','水','木','金','土'][new Date(ds).getDay()]
@@ -725,7 +732,9 @@ async function loadMonthly() {
         const be = recs.find(r => r.type === 'break_end')
         const co = [...recs].reverse().find(r => r.type === 'clock_out')
         const mins = calcMins(recs)
+        const ot = calcOvertime(recs)
         totalMins += mins
+        totalOt += ot
         if (!ci && !co) continue
         const weekend = new Date(ds).getDay() === 0 || new Date(ds).getDay() === 6
         rows += `<tr ${weekend ? 'style="color:#9ca3af"' : ''}>`
@@ -734,12 +743,13 @@ async function loadMonthly() {
         rows += `<td>${bs ? fmt(bs.timestamp) : '-'}</td>`
         rows += `<td>${be ? fmt(be.timestamp) : '-'}</td>`
         rows += `<td>${co ? fmt(co.timestamp) : '-'}</td>`
-        rows += `<td>${mins > 0 ? toHHMM(mins) : '-'}</td></tr>`
+        rows += `<td>${mins > 0 ? toHHMM(mins) : '-'}</td>`
+        rows += `<td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td></tr>`
     }
-    if (!rows) rows = '<tr><td colspan="6" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
-    rows += `<tr class="total-row"><td>月間合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td></tr>`
+    if (!rows) rows = '<tr><td colspan="7" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    rows += `<tr class="total-row"><td>月間合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td></tr>`
     document.getElementById('monthly-tbl').innerHTML =
-        `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th></tr></thead><tbody>${rows}</tbody></table>`
+        `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th></tr></thead><tbody>${rows}</tbody></table>`
 }
 
 function renderQR() {
@@ -775,6 +785,16 @@ function calcMins(records) {
 
 function toHHMM(mins) {
     return `${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}`
+}
+
+// 18:00以降の残業時間（分）を計算
+function calcOvertime(records) {
+    const co = [...records].reverse().find(r => r.type === 'clock_out')
+    if (!co) return 0
+    const coTime = new Date(co.timestamp)
+    const base = new Date(coTime)
+    base.setHours(18, 0, 0, 0)
+    return coTime > base ? Math.round((coTime - base) / 60000) : 0
 }
 
 function showMsg(id, text, ok) {
