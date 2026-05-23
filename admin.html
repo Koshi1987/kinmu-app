@@ -169,7 +169,7 @@
     <div class="tabs">
         <div class="tab active"  onclick="switchTab('today')">📊 今日の状況</div>
         <div class="tab"         onclick="switchTab('records')">📅 勤務記録</div>
-        <div class="tab"         onclick="switchTab('shifts')">🗓 シフト表</div>
+        <div class="tab"         onclick="switchTab('shifts')">シフト表</div>
         <div class="tab"         onclick="switchTab('employees')">👥 職員管理</div>
         <div class="tab"         onclick="switchTab('qr')">📱 QRコード</div>
     </div>
@@ -302,10 +302,16 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 let employees = [], teams = []
 let weekOffset = 0, shiftMonthOffset = 0
 
-const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','休']
+const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','研修','休']
 const SHIFT_COLORS = {
     '日勤':'#dbeafe', '午前':'#fff3e0', '午後':'#fce7f3',
-    '変則':'#f3e5f5', '春夏':'#fce4ec', '有給':'#dcfce7', '休':'#f3f4f6'
+    '変則':'#f3e5f5', '春夏':'#fce4ec', '有給':'#dcfce7',
+    'AM有休':'#bbf7d0', 'PM有休':'#a7f3d0', '研修':'#fde68a', '休':'#f3f4f6'
+}
+// 各シフトの所定労働時間（時間）
+const SHIFT_HOURS = {
+    '日勤':8, '午前':4.5, '午後':4, '変則':7, '春夏':6.5,
+    '有給':8, 'AM有休':8, 'PM有休':8, '研修':8, '休':0
 }
 
 // ---- パスワード ----
@@ -365,19 +371,26 @@ async function loadToday() {
         today.toLocaleDateString('ja-JP', { year:'numeric', month:'long', day:'numeric', weekday:'short' }) + 'の出勤状況'
     document.getElementById('pn-today').textContent = '印刷日時: ' + new Date().toLocaleString('ja-JP')
 
-    const { data: att } = await db.from('attendance').select('*').eq('date', ds).order('timestamp')
+    const [{ data: att }, { data: todayShifts }] = await Promise.all([
+        db.from('attendance').select('*').eq('date', ds).order('timestamp'),
+        db.from('shifts').select('employee_id,shift_type').eq('date', ds)
+    ])
 
     const empAtt = {}
     for (const r of att || []) {
         if (!empAtt[r.employee_id]) empAtt[r.employee_id] = []
         empAtt[r.employee_id].push(r)
     }
+    const shiftMap = {}
+    for (const s of todayShifts || []) shiftMap[s.employee_id] = s.shift_type
+
+    const LEAVE_TYPES = ['有給', 'AM有休', 'PM有休', '研修']
 
     let rows = '', present = 0
     for (const team of teams) {
         const te = employees.filter(e => e.team_id === team.id)
         if (!te.length) continue
-        rows += `<tr class="team-row"><td colspan="5">${team.name}</td></tr>`
+        rows += `<tr class="team-row"><td colspan="6">${team.name}</td></tr>`
         for (const emp of te) {
             const recs = empAtt[emp.id] || []
             const st   = recs.length ? recs[recs.length - 1].type : null
@@ -391,19 +404,25 @@ async function loadToday() {
             const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'})
             const mins = calcMins(recs)
 
+            const empShift = shiftMap[emp.id] || emp.default_shift || ''
+            const biko = LEAVE_TYPES.includes(empShift)
+                ? `<span style="background:#dcfce7;color:#15803d;font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600">${empShift}</span>`
+                : ''
+
             rows += `<tr>
                 <td>${emp.name}</td>
                 <td>${badge}</td>
                 <td>${ci ? fmt(ci.timestamp) : '-'}</td>
                 <td>${co ? fmt(co.timestamp) : '-'}</td>
                 <td>${mins > 0 ? toHHMM(mins) : '-'}</td>
+                <td>${biko}</td>
             </tr>`
         }
     }
 
     document.getElementById('today-tbl').innerHTML = `
         <table>
-            <thead><tr><th>名前</th><th>状態</th><th>出勤</th><th>退勤</th><th>勤務時間</th></tr></thead>
+            <thead><tr><th>名前</th><th>状態</th><th>出勤</th><th>退勤</th><th>勤務時間</th><th>備考</th></tr></thead>
             <tbody>${rows}</tbody>
         </table>
         <p style="margin-top:12px;font-size:13px;color:#6b7280">
@@ -551,26 +570,39 @@ async function loadShiftsMonthly() {
         const bg = dow===0 ? '#fee2e2' : dow===6 ? '#fef3c7' : '#f8fafc'
         hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
     }
+    hdr += `<th style="background:#e0f2fe;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">月合計</th>`
+    hdr += `<th style="background:#f0fdf4;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">週平均</th>`
 
-    let rows = '', curTeam = null
-    for (const emp of displayEmps) {
-        if (teamFilter === 'all' && emp.team_id !== curTeam) {
-            curTeam = emp.team_id
-            const tn = teams.find(t => t.id === curTeam)?.name || ''
-            rows += `<tr class="team-row"><td colspan="${lastDay+1}">${tn}</td></tr>`
+    const LEGEND = `【勤務時間】　1.一日勤務 9:00〜18:00　2.AM勤務 9:00〜13:30　3.時短勤務 9:00〜17:00　4.PM勤務 14:00〜18:00　5.長期休業勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
+
+    let rows = ''
+    for (const team of teams) {
+        const te = displayEmps.filter(e => e.team_id === team.id)
+        if (!te.length) continue
+        if (teamFilter === 'all') {
+            rows += `<tr class="team-row"><td colspan="${lastDay+3}">${team.name}</td></tr>`
         }
-        const roleTag = (teamFilter !== 'all' && emp.role) ? `<br><span style="font-size:10px;font-weight:400;color:#6b7280;line-height:1.3">${emp.role}</span>` : ''
-        let cells = `<td style="white-space:normal;word-break:break-all;font-weight:600;position:sticky;left:0;background:white;z-index:1;padding:5px 8px;font-size:13px;min-width:64px;max-width:80px;line-height:1.4">${emp.name}${roleTag}</td>`
-        for (const { dow, ds } of days) {
-            const key = `${emp.id}_${ds}`
-            const isWknd = dow===0 || dow===6
-            const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd ? '休' : (emp.default_shift || '日勤'))
-            const bg = SHIFT_COLORS[st] || '#fff'
-            const empId = emp.id
-            cells += `<td onclick="cycleShift('${empId}','${ds}','${st}')"
-                style="background:${bg};text-align:center;font-size:12px;cursor:pointer;padding:3px 2px;border:1px solid #f0f0f0">${st}</td>`
+        for (const emp of te) {
+            const roleTag = (teamFilter !== 'all' && emp.role) ? `<br><span style="font-size:10px;font-weight:400;color:#6b7280;line-height:1.3">${emp.role}</span>` : ''
+            let cells = `<td style="white-space:normal;word-break:break-all;font-weight:600;position:sticky;left:0;background:white;z-index:1;padding:5px 8px;font-size:13px;min-width:64px;max-width:80px;line-height:1.4">${emp.name}${roleTag}</td>`
+            let totalHours = 0
+            for (const { dow, ds } of days) {
+                const key = `${emp.id}_${ds}`
+                const isWknd = dow===0 || dow===6
+                const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd ? '休' : (emp.default_shift || '日勤'))
+                const bg = SHIFT_COLORS[st] || '#fff'
+                const empId = emp.id
+                totalHours += SHIFT_HOURS[st] || 0
+                cells += `<td onclick="cycleShift('${empId}','${ds}','${st}')"
+                    style="background:${bg};text-align:center;font-size:12px;cursor:pointer;padding:3px 2px;border:1px solid #f0f0f0">${st}</td>`
+            }
+            const weeklyAvg = (totalHours / (lastDay / 7)).toFixed(1)
+            cells += `<td style="background:#e0f2fe;text-align:center;font-size:12px;font-weight:600;padding:3px 4px;border:1px solid #bae6fd">${totalHours}h</td>`
+            cells += `<td style="background:#f0fdf4;text-align:center;font-size:12px;font-weight:600;padding:3px 4px;border:1px solid #bbf7d0">${weeklyAvg}h</td>`
+            rows += `<tr>${cells}</tr>`
         }
-        rows += `<tr>${cells}</tr>`
+        // チームごとの勤務時間凡例
+        rows += `<tr><td colspan="${lastDay+3}" style="font-size:11px;padding:6px 10px;background:#f8fafc;color:#374151;border-top:2px solid #cbd5e1;border-bottom:2px solid #cbd5e1;white-space:normal">${LEGEND}</td></tr>`
     }
 
     document.getElementById('shift-tbl-monthly').innerHTML =
