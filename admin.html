@@ -94,18 +94,39 @@
         .print-note { display: none; font-size: 12px; color: #666; text-align: right; margin-bottom: 8px; }
 
         @media print {
-            @page { size: A4 landscape; margin: 8mm; }
+            @page { size: A4 landscape; margin: 6mm; }
             header, .tabs, .sec-hd .btn, .sec-hd select, .form-row, .hd-btn,
             #shift-legend, .sec-hd .week-nav button { display: none !important; }
             .print-note { display: block !important; }
             body { background: white; }
             .content { padding: 0 !important; }
-            #shift-tbl-monthly table { font-size: 9pt !important; width: 100% !important; }
-            #shift-tbl-monthly td, #shift-tbl-monthly th {
-                padding: 2px 1px !important; font-size: 9pt !important;
-            }
+            /* スクロール解除：スクロール位置に関係なく全列を表示 */
             #shift-tbl-monthly { overflow: visible !important; }
-            #shift-tbl-monthly div { overflow: visible !important; }
+            #shift-tbl-monthly div {
+                overflow-x: visible !important;
+                overflow-y: visible !important;
+                max-height: none !important;
+            }
+            /* テーブルをA4横に100%フィット */
+            #shift-tbl-monthly table {
+                font-size: 7.5pt !important;
+                width: 100% !important;
+                table-layout: fixed !important;
+            }
+            /* セルの最小幅をリセットして均等割り */
+            #shift-tbl-monthly th,
+            #shift-tbl-monthly td {
+                padding: 1px 2px !important;
+                font-size: 7.5pt !important;
+                min-width: 0 !important;
+                overflow: hidden !important;
+            }
+            /* 名前列：固定幅・sticky解除 */
+            #shift-tbl-monthly th:first-child,
+            #shift-tbl-monthly td:first-child {
+                width: 13% !important;
+                position: static !important;
+            }
         }
 
         .hidden { display: none !important; }
