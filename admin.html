@@ -322,17 +322,44 @@ async function loadToday() {
 async function loadRecords() {
     const date = document.getElementById('rec-date').value
     if (!date) return alert('日付を選択してください')
-    const { data } = await db.from('attendance').select('*,employees(name)').eq('date', date).order('timestamp')
-    const lbl = { clock_in:'出勤', break_start:'休憩イン', break_end:'休憩アウト', clock_out:'退勤' }
-    let rows = ''
+    const { data } = await db.from('attendance').select('*').eq('date', date).order('timestamp')
+
+    const empAtt = {}
     for (const r of data || []) {
-        const t = new Date(r.timestamp).toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit',second:'2-digit'})
-        rows += `<tr><td>${t}</td><td>${r.employees?.name || '-'}</td><td>${lbl[r.type] || r.type}</td></tr>`
+        if (!empAtt[r.employee_id]) empAtt[r.employee_id] = []
+        empAtt[r.employee_id].push(r)
     }
-    if (!rows) rows = '<tr><td colspan="3" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+
+    const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
+
+    let rows = ''
+    for (const team of teams) {
+        const te = employees.filter(e => e.team_id === team.id)
+        if (!te.length) continue
+        rows += `<tr class="team-row"><td colspan="6">${team.name}</td></tr>`
+        for (const emp of te) {
+            const recs = (empAtt[emp.id] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
+            const ci = recs.find(r => r.type === 'clock_in')
+            const bs = recs.find(r => r.type === 'break_start')
+            const be = recs.find(r => r.type === 'break_end')
+            const co = [...recs].reverse().find(r => r.type === 'clock_out')
+            const mins = calcMins(recs)
+            rows += `<tr>
+                <td><strong>${emp.name}</strong></td>
+                <td>${ci ? fmt(ci.timestamp) : '-'}</td>
+                <td>${bs ? fmt(bs.timestamp) : '-'}</td>
+                <td>${be ? fmt(be.timestamp) : '-'}</td>
+                <td>${co ? fmt(co.timestamp) : '-'}</td>
+                <td>${mins > 0 ? toHHMM(mins) : '-'}</td>
+            </tr>`
+        }
+    }
+    if (!rows) rows = '<tr><td colspan="6" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
     document.getElementById('rec-tbl').innerHTML = `
-        <table><thead><tr><th>時刻</th><th>名前</th><th>打刻種別</th></tr></thead>
-        <tbody>${rows}</tbody></table>`
+        <table>
+            <thead><tr><th>名前</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>`
 }
 
 // ---- 週間集計 ----
