@@ -4,80 +4,215 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>打刻システム</title>
+    <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif; background: #f0f4f8; min-height: 100vh; }
-
-        header { background: linear-gradient(135deg, #1d4ed8, #3b82f6); color: white; padding: 16px; text-align: center; }
-        header h1 { font-size: 22px; font-weight: 700; }
-        header small { font-size: 13px; opacity: 0.8; display: block; margin-top: 4px; }
-
-        .wrap { max-width: 480px; margin: 0 auto; padding: 16px; }
-
-        .team-hd { font-size: 12px; font-weight: 700; color: #6b7280; letter-spacing: 1px; margin: 20px 0 8px 4px; }
-
-        .emp-row {
-            background: white; border-radius: 14px; padding: 16px 18px; margin-bottom: 10px;
-            cursor: pointer; display: flex; justify-content: space-between; align-items: center;
-            box-shadow: 0 1px 6px rgba(0,0,0,.07); border: 2px solid transparent;
-            -webkit-tap-highlight-color: transparent; transition: border-color .15s;
+        body {
+            font-family: 'Zen Maru Gothic', 'Hiragino Sans', 'Yu Gothic UI', sans-serif;
+            background: #fff5f8;
+            min-height: 100vh;
         }
-        .emp-row:active { border-color: #3b82f6; transform: scale(.98); }
-        .emp-row .name { font-size: 18px; font-weight: 600; }
-        .badge { font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 500; }
-        .b-none  { background: #f3f4f6; color: #9ca3af; }
-        .b-work  { background: #dcfce7; color: #15803d; }
-        .b-break { background: #fef9c3; color: #92400e; }
-        .b-done  { background: #f1f5f9; color: #64748b; }
 
-        .back-btn { background: none; border: none; color: #3b82f6; font-size: 15px; font-weight: 500; cursor: pointer; padding: 8px 0 16px; }
+        /* ---- 背景の小花模様 ---- */
+        body::before {
+            content: '';
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background-image:
+                radial-gradient(circle, #ffb6c155 1px, transparent 1px),
+                radial-gradient(circle, #ffd1dc44 1px, transparent 1px);
+            background-size: 30px 30px, 50px 50px;
+            background-position: 0 0, 15px 15px;
+            pointer-events: none;
+            z-index: 0;
+        }
 
-        .sel-card { background: white; border-radius: 16px; padding: 20px; text-align: center; margin-bottom: 20px; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
-        .sel-name { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
-        .sel-status { color: #6b7280; font-size: 14px; }
+        header {
+            background: linear-gradient(135deg, #ffb6c1 0%, #ffd1dc 50%, #ffc8d4 100%);
+            color: #7c2d40;
+            padding: 0 0 20px;
+            text-align: center;
+            border-radius: 0 0 36px 36px;
+            box-shadow: 0 4px 20px rgba(255,150,170,.35);
+            position: relative;
+            z-index: 1;
+            overflow: hidden;
+        }
+        .hd-flowers {
+            font-size: 14px;
+            letter-spacing: 4px;
+            padding: 8px 0 4px;
+            opacity: 0.75;
+        }
+        header h1 {
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            padding: 4px 0 2px;
+            text-shadow: 0 1px 3px rgba(255,255,255,.5);
+        }
+        header small {
+            font-size: 13px;
+            opacity: 0.8;
+            display: block;
+            margin-top: 4px;
+            font-weight: 500;
+        }
 
-        .act-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .act-btn { padding: 28px 8px; border: none; border-radius: 18px; font-size: 17px; font-weight: 700; cursor: pointer; line-height: 1.5; transition: transform .15s; }
-        .act-btn:active { transform: scale(.95); }
-        .act-btn:disabled { opacity: .2; cursor: not-allowed; transform: none; }
-        .a-ci { background: #dcfce7; color: #15803d; }
-        .a-bs { background: #fef9c3; color: #92400e; }
-        .a-be { background: #dbeafe; color: #1e40af; }
-        .a-co { background: #fee2e2; color: #b91c1c; }
+        .wrap { max-width: 480px; margin: 0 auto; padding: 16px; position: relative; z-index: 1; }
 
-        .ok-wrap { text-align: center; padding: 48px 20px; }
-        .ok-icon { font-size: 72px; margin-bottom: 12px; }
-        .ok-act  { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
-        .ok-who  { color: #6b7280; margin-bottom: 4px; }
-        .ok-time { font-size: 48px; font-weight: 700; color: #3b82f6; margin-bottom: 32px; }
-        .ok-btn  { padding: 14px 40px; background: #3b82f6; color: white; border: none; border-radius: 14px; font-size: 17px; font-weight: 600; cursor: pointer; }
+        /* ---- チーム見出し ---- */
+        .team-hd {
+            font-size: 13px; font-weight: 700; color: #c05070;
+            letter-spacing: 1px; margin: 22px 0 10px 4px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .team-hd::after {
+            content: '';
+            flex: 1; height: 1.5px;
+            background: linear-gradient(to right, #ffb6c1, transparent);
+            margin-left: 4px;
+        }
 
+        /* ---- 職員カード ---- */
+        .emp-row {
+            background: white;
+            border-radius: 22px;
+            padding: 15px 20px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 3px 12px rgba(255,150,170,.18);
+            border: 2px solid #fce8ef;
+            -webkit-tap-highlight-color: transparent;
+            transition: all .18s;
+        }
+        .emp-row:active { border-color: #ff8fab; transform: scale(.97); background: #fff5f8; }
+        .emp-row .name { font-size: 18px; font-weight: 700; color: #5a2030; }
+
+        .badge { font-size: 12px; padding: 4px 13px; border-radius: 999px; font-weight: 700; }
+        .b-none  { background: #f3f4f6; color: #aab0b8; }
+        .b-work  { background: #d4f5e2; color: #1a6640; }
+        .b-break { background: #fff2cc; color: #8a6000; }
+        .b-done  { background: #eaebf8; color: #4c5ab0; }
+
+        /* ---- 戻るボタン ---- */
+        .back-btn {
+            background: none; border: none; color: #e08098;
+            font-size: 15px; font-weight: 700;
+            cursor: pointer; padding: 8px 0 16px;
+            display: flex; align-items: center; gap: 4px;
+        }
+
+        /* ---- 選択カード ---- */
+        .sel-card {
+            background: linear-gradient(135deg, #fff0f4, #ffe4ec);
+            border-radius: 28px; padding: 24px 20px; text-align: center;
+            margin-bottom: 20px;
+            box-shadow: 0 3px 15px rgba(255,150,170,.2);
+            border: 2px solid #ffd1dc;
+        }
+        .sel-card-deco { font-size: 13px; letter-spacing: 5px; opacity: .5; margin-bottom: 6px; }
+        .sel-name { font-size: 28px; font-weight: 700; color: #5a2030; margin-bottom: 6px; }
+        .sel-status { color: #c06080; font-size: 14px; font-weight: 500; }
+
+        /* ---- 打刻ボタン ---- */
+        .act-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .act-btn {
+            padding: 30px 8px; border: none; border-radius: 26px;
+            font-size: 17px; font-weight: 700; cursor: pointer;
+            line-height: 1.6; transition: all .18s;
+            font-family: 'Zen Maru Gothic', sans-serif;
+            box-shadow: 0 4px 12px rgba(0,0,0,.08);
+        }
+        .act-btn:active { transform: scale(.93); box-shadow: none; }
+        .act-btn:disabled { opacity: .22; cursor: not-allowed; transform: none; box-shadow: none; }
+        .a-ci { background: linear-gradient(135deg, #c8f2d8, #a8e4bc); color: #1a5c35; border: 2px solid #9cdcb0; }
+        .a-bs { background: linear-gradient(135deg, #fff0b8, #ffe08a); color: #7a5200; border: 2px solid #ffd466; }
+        .a-be { background: linear-gradient(135deg, #d4e8fc, #b8d4f8); color: #1a3a70; border: 2px solid #a0c4f0; }
+        .a-co { background: linear-gradient(135deg, #fce0ea, #f8bcd0); color: #8c1a35; border: 2px solid #f0a0b8; }
+
+        /* ---- 完了画面 ---- */
+        .ok-wrap { text-align: center; padding: 44px 20px 32px; }
+        .ok-deco { font-size: 16px; letter-spacing: 4px; opacity: .5; margin-bottom: 8px; }
+        .ok-icon { font-size: 80px; margin-bottom: 14px; }
+        .ok-act  { font-size: 22px; font-weight: 700; color: #5a2030; margin-bottom: 6px; }
+        .ok-who  { color: #c06080; margin-bottom: 6px; font-weight: 500; font-size: 15px; }
+        .ok-time { font-size: 52px; font-weight: 700; color: #ff7096; margin-bottom: 8px; letter-spacing: 2px; }
+        .ok-msg  { font-size: 15px; color: #d08098; margin-bottom: 30px; }
+        .ok-btn  {
+            padding: 15px 44px;
+            background: linear-gradient(135deg, #ffb6c1, #ff8fab);
+            color: white; border: none; border-radius: 999px;
+            font-size: 17px; font-weight: 700; cursor: pointer;
+            font-family: 'Zen Maru Gothic', sans-serif;
+            box-shadow: 0 5px 18px rgba(255,130,160,.4);
+        }
+
+        /* ---- 管理リンク ---- */
         .admin-lnk { text-align: center; margin-top: 32px; padding-bottom: 24px; }
-        .admin-lnk a { color: #d1d5db; font-size: 12px; text-decoration: none; }
+        .admin-lnk a { color: #e8b8c4; font-size: 12px; text-decoration: none; }
 
-        .req-btn { width: 100%; margin-top: 16px; padding: 14px; background: white; color: #6b7280; border: 1.5px solid #e5e7eb; border-radius: 14px; font-size: 15px; font-weight: 600; cursor: pointer; }
-        .req-form { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
-        .req-form label { font-size: 13px; color: #6b7280; display: block; margin-bottom: 6px; }
-        .req-form select, .req-form input[type="date"], .req-form textarea { width: 100%; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 16px; margin-bottom: 16px; font-family: inherit; }
+        /* ---- シフト申請ボタン ---- */
+        .req-btn {
+            width: 100%; margin-top: 16px; padding: 14px;
+            background: white; color: #c06080;
+            border: 2px solid #ffd1dc; border-radius: 22px;
+            font-size: 15px; font-weight: 700; cursor: pointer;
+            font-family: 'Zen Maru Gothic', sans-serif;
+            transition: all .15s;
+        }
+        .req-btn:active { background: #fff5f8; }
+
+        /* ---- 申請フォーム ---- */
+        .req-form {
+            background: white; border-radius: 22px; padding: 22px;
+            box-shadow: 0 3px 14px rgba(255,150,170,.15);
+            border: 2px solid #fce8ef;
+        }
+        .req-form label {
+            font-size: 13px; color: #c06080; display: block;
+            margin-bottom: 6px; font-weight: 700;
+        }
+        .req-form select,
+        .req-form input[type="date"],
+        .req-form textarea {
+            width: 100%; padding: 12px; border: 1.5px solid #ffd1dc; border-radius: 14px;
+            font-size: 15px; margin-bottom: 16px;
+            font-family: 'Zen Maru Gothic', sans-serif;
+            background: #fff9fb; color: #5a2030; outline: none;
+        }
+        .req-form select:focus,
+        .req-form input[type="date"]:focus,
+        .req-form textarea:focus { border-color: #ff8fab; }
         .req-form textarea { height: 80px; resize: none; }
-        .req-submit { width: 100%; padding: 16px; background: #1d4ed8; color: white; border: none; border-radius: 14px; font-size: 17px; font-weight: 700; cursor: pointer; margin-top: 4px; }
+        .req-submit {
+            width: 100%; padding: 16px;
+            background: linear-gradient(135deg, #ffb6c1, #ff8fab);
+            color: white; border: none; border-radius: 999px;
+            font-size: 17px; font-weight: 700; cursor: pointer; margin-top: 4px;
+            font-family: 'Zen Maru Gothic', sans-serif;
+            box-shadow: 0 5px 18px rgba(255,130,160,.35);
+        }
 
-        .err { background: #fef2f2; color: #b91c1c; border-radius: 12px; padding: 14px; margin: 12px 0; font-size: 14px; }
-        .loading { text-align: center; color: #9ca3af; padding: 40px; font-size: 16px; }
+        .err { background: #fce4ec; color: #b71c1c; border-radius: 14px; padding: 14px; margin: 12px 0; font-size: 14px; }
+        .loading { text-align: center; color: #e8a0b0; padding: 40px; font-size: 16px; }
         .hidden { display: none !important; }
     </style>
 </head>
 <body>
 <header>
-    <h1>打刻システム</h1>
+    <div class="hd-flowers">🌸 🌺 🌼 🌷 🌸 🌺 🌼 🌷 🌸 🌺 🌼</div>
+    <h1>🕐 打刻システム</h1>
     <small id="hd-date"></small>
 </header>
 
 <div class="wrap">
     <!-- 画面1: 職員一覧 -->
     <div id="v-list">
-        <div id="emp-list"><div class="loading">読み込み中…</div></div>
+        <div id="emp-list"><div class="loading">読み込み中… 🌸</div></div>
         <div class="admin-lnk"><a href="admin.html">管理画面</a></div>
     </div>
 
@@ -85,6 +220,7 @@
     <div id="v-act" class="hidden">
         <button class="back-btn" onclick="goList()">← 戻る</button>
         <div class="sel-card">
+            <div class="sel-card-deco">🌸 🌼 🌸</div>
             <div class="sel-name" id="sel-name"></div>
             <div class="sel-status" id="sel-st"></div>
         </div>
@@ -101,13 +237,14 @@
     <div id="v-req" class="hidden">
         <button class="back-btn" onclick="show('v-act')">← 戻る</button>
         <div class="sel-card">
+            <div class="sel-card-deco">🌸 🌼 🌸</div>
             <div class="sel-name" id="req-name"></div>
             <div class="sel-status">シフト変更申請</div>
         </div>
         <div class="req-form">
-            <label>日付</label>
+            <label>📅 日付</label>
             <input type="date" id="req-date">
-            <label>変更内容</label>
+            <label>✏️ 変更内容</label>
             <select id="req-type" onchange="toggleHours()">
                 <option value="有給">有給（全日）</option>
                 <option value="AM有休">AM有休（午前休）</option>
@@ -117,7 +254,7 @@
                 <option value="休">休み</option>
             </select>
             <div id="hours-row" style="display:none">
-                <label>使用時間数</label>
+                <label>⏰ 使用時間数</label>
                 <select id="req-hours">
                     <option value="1">1時間</option>
                     <option value="2">2時間</option>
@@ -129,30 +266,29 @@
                     <option value="8">8時間</option>
                 </select>
             </div>
-            <label>理由・コメント（任意）</label>
+            <label>💬 理由・コメント（任意）</label>
             <textarea id="req-reason" placeholder="例：外部研修のため、通院のため など"></textarea>
-            <button class="req-submit" onclick="submitRequest()">申請する</button>
+            <button class="req-submit" onclick="submitRequest()">✉️ 申請する</button>
         </div>
     </div>
 
     <!-- 画面4: 完了 -->
     <div id="v-ok" class="hidden">
         <div class="ok-wrap">
-            <div class="ok-icon">✅</div>
+            <div class="ok-deco">🌸 🌼 🌷 🌼 🌸</div>
+            <div class="ok-icon">💮</div>
             <div class="ok-act" id="ok-act"></div>
             <div class="ok-who" id="ok-who"></div>
             <div class="ok-time" id="ok-time"></div>
+            <div class="ok-msg" id="ok-msg">今日もお疲れさまです 💕</div>
             <button class="ok-btn" onclick="goList()">トップへ戻る</button>
         </div>
     </div>
 </div>
 
 <script>
-// =============================================
-// 設定：YOUR_ANON_KEY_HERE を自分のキーに変える
 const SUPABASE_URL = 'https://afqhuswlhgcqaduyppja.supabase.co'
 const SUPABASE_KEY = 'sb_publishable_41dGpTLOwn_S0CuI8JxY7A_WkUuTSX9'
-// =============================================
 
 const { createClient } = window.supabase
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -170,6 +306,12 @@ const AL = {
     break_start: '休憩イン',
     break_end: '休憩アウト',
     clock_out: '退勤'
+}
+const OK_MSG = {
+    clock_in:    '今日も一日よろしくお願いします 🌸',
+    break_start: 'ゆっくり休んでね ☕',
+    break_end:   'お疲れさま！引き続きよろしく 💪',
+    clock_out:   '今日もお疲れさまでした 💕'
 }
 
 function todayStr() { return new Date().toLocaleDateString('sv-SE') }
@@ -200,7 +342,7 @@ function renderList() {
     for (const t of teams) {
         const te = emps.filter(e => e.team_id === t.id)
         if (!te.length) continue
-        h += `<div class="team-hd">${t.name}</div>`
+        h += `<div class="team-hd">🌸 ${t.name}</div>`
         for (const e of te) {
             const s = todaySt[e.id]
             let cls = 'b-none', lb = '未打刻'
@@ -216,7 +358,6 @@ function renderList() {
     if (!h) h = '<div class="loading">職員が登録されていません。<br>管理画面から追加してください。</div>'
     document.getElementById('emp-list').innerHTML = h
 
-    // URLパラメータ ?id=xxx で職員を自動選択（QRコード用）
     const pid = new URLSearchParams(location.search).get('id')
     if (pid) selEmpFn(pid)
 }
@@ -242,6 +383,7 @@ async function rec(type) {
         document.getElementById('ok-act').textContent  = AL[type] + 'しました'
         document.getElementById('ok-who').textContent  = selEmp.name
         document.getElementById('ok-time').textContent = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' })
+        document.getElementById('ok-msg').textContent  = OK_MSG[type] || '今日もありがとう 💕'
         show('v-ok')
     } catch(e) { alert('エラー: ' + e.message) }
 }
@@ -282,6 +424,7 @@ async function submitRequest() {
         document.getElementById('ok-act').textContent  = 'シフト変更申請を送りました'
         document.getElementById('ok-who').textContent  = selEmp.name + '　' + date + '　' + type
         document.getElementById('ok-time').textContent = '申請完了 ✓'
+        document.getElementById('ok-msg').textContent  = '確認後に反映されます 🌸'
         show('v-ok')
     } catch(e) { alert('エラー: ' + e.message) }
 }
