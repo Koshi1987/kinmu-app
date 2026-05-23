@@ -263,7 +263,7 @@ async function loadMaster() {
 
 // ---- タブ切り替え ----
 function switchTab(name) {
-    const names = ['today','records','weekly','shifts','employees','qr']
+    const names = ['today','records','weekly','shifts','employees','qr','monthly']
     document.querySelectorAll('.tab').forEach((t, i) =>
         t.classList.toggle('active', names[i] === name)
     )
