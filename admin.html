@@ -282,6 +282,7 @@
                         <option value="午前">午前パート</option>
                         <option value="午後">午後パート</option>
                         <option value="変則">変則パート</option>
+                        <option value="春夏">春夏勤務</option>
                     </select>
                     <button class="btn btn-primary" onclick="addEmployee()">追加</button>
                 </div>
@@ -655,21 +656,33 @@ function renderEmployees() {
     document.getElementById('new-team').innerHTML =
         teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('')
 
+    const DEFAULT_SHIFTS = ['日勤','午前','午後','変則','春夏']
+
     let html = ''
     for (const team of teams) {
         const te = employees.filter(e => e.team_id === team.id)
         if (!te.length) continue
         html += `<div style="font-size:12px;font-weight:700;color:#6b7280;margin:16px 0 8px">${team.name}</div>`
         for (const emp of te) {
+            const opts = DEFAULT_SHIFTS.map(s =>
+                `<option value="${s}"${emp.default_shift===s?' selected':''}>${s}</option>`
+            ).join('')
             html += `<div class="emp-card">
                 <div class="emp-info">
                     <div class="name">${emp.name}</div>
-                    <div class="team-lbl">${emp.teams?.name || ''}</div>
+                    <div class="team-lbl">${emp.teams?.name || ''}${emp.role ? '　' + emp.role : ''}</div>
                 </div>
-                <div class="emp-actions">
-                    <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',-1)">↑</button>
-                    <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',1)">↓</button>
-                    <button class="btn btn-danger btn-sm" onclick="deleteEmployee('${emp.id}','${emp.name}')">削除</button>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <label style="font-size:12px;color:#6b7280;white-space:nowrap">基本勤務:</label>
+                    <select onchange="updateDefaultShift('${emp.id}',this.value)"
+                        style="padding:5px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;background:#f8fafc;cursor:pointer">
+                        ${opts}
+                    </select>
+                    <div class="emp-actions">
+                        <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',-1)">↑</button>
+                        <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',1)">↓</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteEmployee('${emp.id}','${emp.name}')">削除</button>
+                    </div>
                 </div>
             </div>`
         }
@@ -710,6 +723,14 @@ async function deleteEmployee(id, name) {
     await db.from('employees').update({ active: false }).eq('id', id)
     await loadMaster()
     renderEmployees()
+}
+
+async function updateDefaultShift(empId, newShift) {
+    const { error } = await db.from('employees').update({ default_shift: newShift }).eq('id', empId)
+    if (error) { alert('エラー: ' + error.message); return }
+    const emp = employees.find(e => e.id === empId)
+    if (emp) emp.default_shift = newShift
+    showMsg('emp-msg', '勤務形態を「' + newShift + '」に更新しました ✓', true)
 }
 
 // ---- 申請確認 ----
