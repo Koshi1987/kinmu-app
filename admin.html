@@ -100,12 +100,16 @@
         .sub-tab:hover:not(.active) { color: #374151; }
 
         @media print {
-            @page { size: A4 landscape; margin: 6mm; }
-            header, .tabs, .sec-hd .btn, .sec-hd select, .form-row, .hd-btn,
+            @page { size: A4 portrait; margin: 10mm; }  /* デフォルト縦（シフト表はJSで横に切り替え） */
+            header, .tabs, .sub-tabs, .sec-hd .btn, .sec-hd select, .form-row, .hd-btn,
             #shift-legend, .sec-hd .week-nav button { display: none !important; }
             .print-note { display: block !important; }
             body { background: white; }
             .content { padding: 0 !important; }
+            /* 月間記録・週間集計：縦A4にフィット */
+            #monthly-tbl table, #weekly-tbl table { width: 100%; font-size: 10pt; border-collapse: collapse; }
+            #monthly-tbl th, #monthly-tbl td,
+            #weekly-tbl th, #weekly-tbl td { padding: 4px 8px; border-bottom: 1px solid #e5e7eb; }
             /* スクロール解除：スクロール位置に関係なく全列を表示 */
             #shift-tbl-monthly { overflow: visible !important; }
             #shift-tbl-monthly div {
@@ -750,6 +754,19 @@ function showMsg(id, text, ok) {
 }
 
 document.getElementById('rec-date').value = new Date().toLocaleDateString('sv-SE')
+
+// ---- 印刷向き自動切り替え（シフト表→横、その他→縦） ----
+;(function() {
+    const styleEl = document.createElement('style')
+    styleEl.id = 'print-orientation'
+    document.head.appendChild(styleEl)
+    window.addEventListener('beforeprint', function() {
+        const isShift = !document.getElementById('tab-shifts').classList.contains('hidden')
+        styleEl.textContent = isShift
+            ? '@media print { @page { size: A4 landscape; margin: 6mm; } }'
+            : '@media print { @page { size: A4 portrait; margin: 10mm; } }'
+    })
+})()
 </script>
 </body>
 </html>
