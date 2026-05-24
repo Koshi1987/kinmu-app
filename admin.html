@@ -325,7 +325,7 @@
                     <button class="btn btn-ghost" onclick="loadLeaveBalances()">🔄 更新</button>
                 </div>
                 <div style="font-size:13px;color:#6b7280;margin-bottom:12px">
-                    「付与日数」を入力すると残日数が自動計算されます。使用日数は承認済みの申請から自動集計します。
+                    「付与日数」「使用日数」は直接入力できます。使用日数を空欄にすると承認済み申請から自動集計します。
                 </div>
                 <div id="leave-table"><div class="loading">読み込み中…</div></div>
             </div>
@@ -869,10 +869,17 @@ async function loadLeaveBalances() {
         if (!te.length) continue
         html += `<tr><td colspan="4" style="background:#f1f5f9;font-size:12px;font-weight:700;padding:6px 14px;color:#374151">${team.name}</td></tr>`
         for (const emp of te) {
-            const granted = emp.paid_leave_days || 0
-            const used    = Math.round((usedMap[emp.id] || 0) * 10) / 10
-            const remain  = Math.round((granted - used) * 10) / 10
+            const granted  = emp.paid_leave_days || 0
+            const autoCal  = Math.round((usedMap[emp.id] || 0) * 10) / 10
+            // 手動設定があればそれを優先、なければ自動集計
+            const usedManual = (emp.paid_leave_used !== null && emp.paid_leave_used !== undefined)
+                ? emp.paid_leave_used : null
+            const used     = usedManual !== null ? usedManual : autoCal
+            const remain   = Math.round((granted - used) * 10) / 10
             const remColor = remain < 5 ? '#dc2626' : remain < 10 ? '#d97706' : '#15803d'
+            const usedLabel = usedManual !== null
+                ? `<span style="font-size:10px;color:#f97316;display:block">手動設定</span>`
+                : `<span style="font-size:10px;color:#9ca3af;display:block">自動</span>`
             html += `<tr style="border-bottom:1px solid #f3f4f6">
                 <td style="padding:10px 14px;font-size:14px;font-weight:600">${emp.name}</td>
                 <td style="text-align:center;padding:6px 8px">
@@ -881,13 +888,32 @@ async function loadLeaveBalances() {
                         style="width:70px;padding:5px 8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px;text-align:center">
                     <span style="font-size:12px;color:#6b7280">日</span>
                 </td>
-                <td style="text-align:center;padding:10px 8px;font-size:14px;color:#1e40af">${used}日</td>
+                <td style="text-align:center;padding:6px 8px">
+                    <input type="number" value="${usedManual !== null ? usedManual : ''}"
+                        placeholder="${autoCal}"
+                        min="0" max="99" step="0.5"
+                        onchange="saveUsedLeave('${emp.id}',this.value)"
+                        style="width:70px;padding:5px 8px;border:1.5px solid #bfdbfe;border-radius:8px;font-size:14px;text-align:center;background:#f0f9ff"
+                        title="空欄で自動計算に戻ります">
+                    <span style="font-size:12px;color:#6b7280">日</span>
+                    ${usedLabel}
+                </td>
                 <td style="text-align:center;padding:10px 8px;font-size:15px;font-weight:700;color:${remColor}">${remain}日</td>
             </tr>`
         }
     }
     html += '</tbody></table>'
     el.innerHTML = html
+}
+
+async function saveUsedLeave(empId, val) {
+    // 空欄なら null（自動計算に戻す）、値があれば手動設定
+    const newVal = val === '' ? null : (parseFloat(val) || 0)
+    const { error } = await db.from('employees').update({ paid_leave_used: newVal }).eq('id', empId)
+    if (error) { alert('エラー: ' + error.message); return }
+    const emp = employees.find(e => e.id === empId)
+    if (emp) emp.paid_leave_used = newVal
+    loadLeaveBalances()
 }
 
 async function savePaidLeave(empId, days) {
