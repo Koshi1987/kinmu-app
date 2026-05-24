@@ -247,8 +247,8 @@
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">
                 <span style="background:#ffffff;padding:3px 10px;border-radius:4px;border:1px solid #e5e7eb">日勤</span>
                 <span style="background:#fef9c3;padding:3px 10px;border-radius:4px">午前</span>
-                <span style="background:#d1fae5;padding:3px 10px;border-radius:4px">午後</span>
-                <span style="background:#ede9fe;padding:3px 10px;border-radius:4px">変則</span>
+                <span style="background:#ede9fe;padding:3px 10px;border-radius:4px">午後</span>
+                <span style="background:#d1fae5;padding:3px 10px;border-radius:4px">変則</span>
                 <span style="background:#fce7f3;padding:3px 10px;border-radius:4px">一日有給</span>
                 <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">AM有休</span>
                 <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">PM有休</span>
@@ -360,8 +360,8 @@ const SHIFT_TYPES = ['日勤','午前','午後','変則','有給','AM有休','PM
 const SHIFT_COLORS = {
     '日勤':    '#ffffff',   // 白
     '午前':    '#fef9c3',   // 黄
-    '午後':    '#d1fae5',   // パステルグリーン
-    '変則':    '#ede9fe',   // 薄紫
+    '午後':    '#ede9fe',   // パステルパープル
+    '変則':    '#d1fae5',   // パステルグリーン
     '春夏':    '#bfdbfe',   // 青
     '有給':    '#fce7f3',   // 薄ピンク
     'AM有休':  '#fbcfe8',   // ピンク
@@ -656,7 +656,7 @@ async function loadShiftsMonthly() {
         hdr += `<th style="background:#fef3c7;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">残業計</th>`
     }
 
-    const LEGEND = `【勤務時間】　1.一日勤務 9:00〜18:00　2.AM勤務 9:00〜13:30　3.時短勤務 9:00〜17:00　4.PM勤務 14:00〜18:00　5.長期休業勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
+    const LEGEND = `【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00　5.春夏勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
     const today = new Date().toLocaleDateString('sv-SE')
 
     let rows = ''
