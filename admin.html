@@ -341,7 +341,7 @@ const ADMIN_PASSWORD = '0358'   // ← パスワードはここで変えられ�
 const { createClient } = window.supabase
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 
-let employees = [], teams = []
+let employees = [], teams = [], pendingMap = {}
 let weekOffset = 0, shiftMonthOffset = 0
 
 const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','時間有給','研修','休']
@@ -768,6 +768,8 @@ async function loadRequests() {
 
     const pending = (data || []).filter(r => r.status === 'pending')
     const done    = (data || []).filter(r => r.status !== 'pending')
+    pendingMap = {}
+    for (const r of pending) pendingMap[r.id] = r
 
     let html = ''
 
@@ -788,7 +790,7 @@ async function loadRequests() {
             }
             const borderColor = isFix ? '#f97316' : '#f59e0b'
             const approveBtn  = isFix
-                ? `<button onclick="approveFix('${r.id}','${r.employee_id}','${r.date}',${JSON.stringify(r.reason)})"
+                ? `<button onclick="approveFix('${r.id}')"
                       style="padding:8px 16px;background:#ffedd5;color:#c2410c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認・反映</button>`
                 : `<button onclick="approveRequest('${r.id}','${r.employee_id}','${r.date}','${r.requested_type}')"
                       style="padding:8px 16px;background:#dcfce7;color:#15803d;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認</button>`
@@ -856,10 +858,13 @@ async function rejectRequest(id) {
     loadRequests()
 }
 
-async function approveFix(id, empId, date, reasonJson) {
+async function approveFix(id) {
+    const r = pendingMap[id]
+    if (!r) return alert('データが見つかりません。画面を更新してください。')
+    const { employee_id: empId, date } = r
     if (!confirm(`${date} の打刻補正を承認して出退勤記録に反映しますか？`)) return
     try {
-        const parsed = JSON.parse(reasonJson)
+        const parsed = JSON.parse(r.reason)
         const times  = parsed.times || {}
         for (const [type, time] of Object.entries(times)) {
             const timestamp = new Date(`${date}T${time}:00`).toISOString()
