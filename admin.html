@@ -266,7 +266,34 @@
             <div class="sec-hd">
                 <span class="sec-title">シフト変更申請</span>
                 <button class="btn btn-ghost" onclick="loadRequests()">🔄 更新</button>
+                <button class="btn btn-ghost" onclick="toggleAdminFix()">✏️ 手動打刻補正</button>
             </div>
+
+            <!-- 管理者手動打刻補正フォーム -->
+            <div id="admin-fix-form" style="display:none;background:white;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-left:4px solid #f97316">
+                <div style="font-size:15px;font-weight:700;margin-bottom:14px">✏️ 管理者による打刻補正（直接入力）</div>
+                <div class="form-row">
+                    <select id="afix-emp" style="min-width:120px"></select>
+                    <input type="date" id="afix-date">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+                    <label style="font-size:13px;color:#6b7280">🟢 出勤<br>
+                        <input type="time" id="afix-ci" style="width:100%;margin-top:4px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px">
+                    </label>
+                    <label style="font-size:13px;color:#6b7280">☕ 休憩イン<br>
+                        <input type="time" id="afix-bs" style="width:100%;margin-top:4px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px">
+                    </label>
+                    <label style="font-size:13px;color:#6b7280">🔵 休憩アウト<br>
+                        <input type="time" id="afix-be" style="width:100%;margin-top:4px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px">
+                    </label>
+                    <label style="font-size:13px;color:#6b7280">🔴 退勤<br>
+                        <input type="time" id="afix-co" style="width:100%;margin-top:4px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px">
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="adminCorrect()">補正を保存</button>
+                <span id="afix-msg" style="font-size:13px;margin-left:12px"></span>
+            </div>
+
             <div id="req-list"><div class="loading">読み込み中…</div></div>
         </div>
 
@@ -747,17 +774,35 @@ async function loadRequests() {
     if (pending.length) {
         html += `<div style="font-size:13px;font-weight:700;color:#92400e;margin-bottom:12px">⏳ 未確認（${pending.length}件）</div>`
         for (const r of pending) {
-            html += `<div style="background:white;border-radius:12px;padding:16px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-left:4px solid #f59e0b">
+            const isFix = r.requested_type === '打刻補正'
+            let fixDetail = ''
+            let comment = r.reason || ''
+            if (isFix && r.reason) {
+                try {
+                    const parsed = JSON.parse(r.reason)
+                    const times = parsed.times || {}
+                    comment = parsed.comment || ''
+                    const labels = { clock_in:'🟢出勤', break_start:'☕休憩イン', break_end:'🔵休憩アウト', clock_out:'🔴退勤' }
+                    fixDetail = Object.entries(times).map(([k,v]) => `<span style="background:#fff3e0;padding:2px 8px;border-radius:4px;margin-right:4px;font-weight:600">${labels[k]} ${v}</span>`).join('')
+                } catch(e) {}
+            }
+            const borderColor = isFix ? '#f97316' : '#f59e0b'
+            const approveBtn  = isFix
+                ? `<button onclick="approveFix('${r.id}','${r.employee_id}','${r.date}',${JSON.stringify(r.reason)})"
+                      style="padding:8px 16px;background:#ffedd5;color:#c2410c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認・反映</button>`
+                : `<button onclick="approveRequest('${r.id}','${r.employee_id}','${r.date}','${r.requested_type}')"
+                      style="padding:8px 16px;background:#dcfce7;color:#15803d;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認</button>`
+            html += `<div style="background:white;border-radius:12px;padding:16px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-left:4px solid ${borderColor}">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
-                    <div>
+                    <div style="flex:1">
                         <div style="font-size:16px;font-weight:600">${r.employees?.name || '-'}</div>
-                        <div style="font-size:13px;color:#6b7280;margin-top:4px">${r.date}　<span style="background:#fde68a;padding:2px 8px;border-radius:4px;font-weight:600">${r.requested_type}${r.requested_hours > 0 ? '　' + r.requested_hours + '時間' : ''}</span></div>
-                        ${r.reason ? `<div style="font-size:13px;color:#374151;margin-top:6px">💬 ${r.reason}</div>` : ''}
+                        <div style="font-size:13px;color:#6b7280;margin-top:4px">${r.date}　<span style="background:${isFix?'#ffedd5':'#fde68a'};padding:2px 8px;border-radius:4px;font-weight:600">${r.requested_type}</span></div>
+                        ${fixDetail ? `<div style="margin-top:8px;line-height:2">${fixDetail}</div>` : ''}
+                        ${comment ? `<div style="font-size:13px;color:#374151;margin-top:6px">💬 ${comment}</div>` : ''}
                         <div style="font-size:11px;color:#9ca3af;margin-top:6px">${new Date(r.created_at).toLocaleString('ja-JP')}</div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0">
-                        <button onclick="approveRequest('${r.id}','${r.employee_id}','${r.date}','${r.requested_type}')"
-                            style="padding:8px 16px;background:#dcfce7;color:#15803d;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認</button>
+                        ${approveBtn}
                         <button onclick="rejectRequest('${r.id}')"
                             style="padding:8px 16px;background:#fee2e2;color:#b91c1c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✗ 却下</button>
                     </div>
@@ -809,6 +854,73 @@ async function rejectRequest(id) {
     if (!confirm('この申請を却下しますか？')) return
     await db.from('shift_requests').update({ status: 'rejected' }).eq('id', id)
     loadRequests()
+}
+
+async function approveFix(id, empId, date, reasonJson) {
+    if (!confirm(`${date} の打刻補正を承認して出退勤記録に反映しますか？`)) return
+    try {
+        const parsed = JSON.parse(reasonJson)
+        const times  = parsed.times || {}
+        for (const [type, time] of Object.entries(times)) {
+            const timestamp = new Date(`${date}T${time}:00`).toISOString()
+            const { data: ex } = await db.from('attendance')
+                .select('id').eq('employee_id', empId).eq('date', date).eq('type', type)
+            if (ex && ex.length > 0) {
+                await db.from('attendance').update({ timestamp }).eq('id', ex[0].id)
+            } else {
+                await db.from('attendance').insert({ employee_id: empId, date, type, timestamp })
+            }
+        }
+        await db.from('shift_requests').update({ status: 'approved' }).eq('id', id)
+        loadRequests()
+        alert('✓ 打刻補正を反映しました')
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+function toggleAdminFix() {
+    const f = document.getElementById('admin-fix-form')
+    const show = f.style.display === 'none'
+    f.style.display = show ? 'block' : 'none'
+    if (show) {
+        // 職員セレクトを更新
+        document.getElementById('afix-emp').innerHTML =
+            employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+        document.getElementById('afix-date').value = new Date().toLocaleDateString('sv-SE')
+    }
+}
+
+async function adminCorrect() {
+    const empId = document.getElementById('afix-emp').value
+    const date  = document.getElementById('afix-date').value
+    const ci    = document.getElementById('afix-ci').value
+    const bs    = document.getElementById('afix-bs').value
+    const be    = document.getElementById('afix-be').value
+    const co    = document.getElementById('afix-co').value
+    if (!date) return
+    if (!ci && !bs && !be && !co) { document.getElementById('afix-msg').textContent = '時刻を入力してください'; return }
+    const times = {}
+    if (ci) times.clock_in    = ci
+    if (bs) times.break_start = bs
+    if (be) times.break_end   = be
+    if (co) times.clock_out   = co
+    try {
+        for (const [type, time] of Object.entries(times)) {
+            const timestamp = new Date(`${date}T${time}:00`).toISOString()
+            const { data: ex } = await db.from('attendance')
+                .select('id').eq('employee_id', empId).eq('date', date).eq('type', type)
+            if (ex && ex.length > 0) {
+                await db.from('attendance').update({ timestamp }).eq('id', ex[0].id)
+            } else {
+                await db.from('attendance').insert({ employee_id: empId, date, type, timestamp })
+            }
+        }
+        document.getElementById('afix-msg').textContent = '✓ 保存しました'
+        document.getElementById('afix-ci').value = ''
+        document.getElementById('afix-bs').value = ''
+        document.getElementById('afix-be').value = ''
+        document.getElementById('afix-co').value = ''
+        setTimeout(() => document.getElementById('afix-msg').textContent = '', 3000)
+    } catch(e) { alert('エラー: ' + e.message) }
 }
 
 // ---- QRコード ----

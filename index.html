@@ -197,6 +197,21 @@
             box-shadow: 0 5px 18px rgba(255,130,160,.35);
         }
 
+        /* ---- 打刻補正フォーム ---- */
+        .fix-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 4px; border-bottom: 1px solid #fce8ef;
+        }
+        .fix-row:last-of-type { border-bottom: none; }
+        .fix-row .fix-lbl { font-size: 15px; font-weight: 700; color: #5a2030; }
+        .fix-row input[type="time"] {
+            width: 140px; padding: 9px 12px;
+            border: 1.5px solid #ffd1dc; border-radius: 12px;
+            font-size: 15px; font-family: 'Zen Maru Gothic', sans-serif;
+            background: #fff9fb; color: #5a2030; outline: none; margin-bottom: 0;
+        }
+        .fix-row input[type="time"]:focus { border-color: #ff8fab; }
+
         .err { background: #fce4ec; color: #b71c1c; border-radius: 14px; padding: 14px; margin: 12px 0; font-size: 14px; }
         .loading { text-align: center; color: #e8a0b0; padding: 40px; font-size: 16px; }
         .hidden { display: none !important; }
@@ -231,6 +246,7 @@
             <button class="act-btn a-co" id="b-co" onclick="rec('clock_out')">🔴<br>退勤</button>
         </div>
         <button class="req-btn" onclick="goReq()">📝 シフト変更申請</button>
+        <button class="req-btn" style="margin-top:10px;color:#e07050;border-color:#fed7aa" onclick="goFix()">⏰ 打刻補正申請（押し忘れ）</button>
     </div>
 
     <!-- 画面3: シフト変更申請 -->
@@ -272,7 +288,41 @@
         </div>
     </div>
 
-    <!-- 画面4: 完了 -->
+    <!-- 画面4: 打刻補正申請 -->
+    <div id="v-fix" class="hidden">
+        <button class="back-btn" onclick="show('v-act')">← 戻る</button>
+        <div class="sel-card">
+            <div class="sel-card-deco">⏰ 打刻補正申請</div>
+            <div class="sel-name" id="fix-name"></div>
+            <div class="sel-status">押し忘れた打刻を申請してください</div>
+        </div>
+        <div class="req-form">
+            <label>📅 対象日</label>
+            <input type="date" id="fix-date">
+            <label style="margin-bottom:10px">🕐 補正する時刻（該当するものだけ入力）</label>
+            <div class="fix-row">
+                <span class="fix-lbl">🟢 出勤</span>
+                <input type="time" id="fix-ci">
+            </div>
+            <div class="fix-row">
+                <span class="fix-lbl">☕ 休憩イン</span>
+                <input type="time" id="fix-bs">
+            </div>
+            <div class="fix-row">
+                <span class="fix-lbl">🔵 休憩アウト</span>
+                <input type="time" id="fix-be">
+            </div>
+            <div class="fix-row" style="margin-bottom:16px">
+                <span class="fix-lbl">🔴 退勤</span>
+                <input type="time" id="fix-co">
+            </div>
+            <label>💬 コメント（任意）</label>
+            <textarea id="fix-reason" placeholder="例：会議が伸びて退勤を押し忘れました"></textarea>
+            <button class="req-submit" style="background:linear-gradient(135deg,#fed7aa,#fb923c)" onclick="submitFix()">✉️ 申請する</button>
+        </div>
+    </div>
+
+    <!-- 画面5: 完了 -->
     <div id="v-ok" class="hidden">
         <div class="ok-wrap">
             <div class="ok-deco">🌸 🌼 🌷 🌼 🌸</div>
@@ -391,7 +441,7 @@ async function rec(type) {
 function goList() { renderList(); show('v-list') }
 
 function show(id) {
-    ['v-list','v-act','v-req','v-ok'].forEach(v =>
+    ['v-list','v-act','v-req','v-fix','v-ok'].forEach(v =>
         document.getElementById(v).classList.toggle('hidden', v !== id)
     )
 }
@@ -408,6 +458,46 @@ function goReq() {
 function toggleHours() {
     const type = document.getElementById('req-type').value
     document.getElementById('hours-row').style.display = type === '時間有給' ? 'block' : 'none'
+}
+
+function goFix() {
+    document.getElementById('fix-name').textContent = selEmp.name
+    document.getElementById('fix-date').value = todayStr()
+    document.getElementById('fix-ci').value = ''
+    document.getElementById('fix-bs').value = ''
+    document.getElementById('fix-be').value = ''
+    document.getElementById('fix-co').value = ''
+    document.getElementById('fix-reason').value = ''
+    show('v-fix')
+}
+
+async function submitFix() {
+    const date   = document.getElementById('fix-date').value
+    const ci     = document.getElementById('fix-ci').value
+    const bs     = document.getElementById('fix-bs').value
+    const be     = document.getElementById('fix-be').value
+    const co     = document.getElementById('fix-co').value
+    const reason = document.getElementById('fix-reason').value
+    if (!date) return alert('日付を選択してください')
+    if (!ci && !bs && !be && !co) return alert('補正する時刻を1つ以上入力してください')
+    const times = {}
+    if (ci) times.clock_in    = ci
+    if (bs) times.break_start = bs
+    if (be) times.break_end   = be
+    if (co) times.clock_out   = co
+    try {
+        await db.from('shift_requests').insert({
+            employee_id: selEmp.id, date,
+            requested_type: '打刻補正',
+            reason: JSON.stringify({ times, comment: reason }),
+            requested_hours: 0
+        })
+        document.getElementById('ok-act').textContent  = '打刻補正を申請しました'
+        document.getElementById('ok-who').textContent  = selEmp.name + '　' + date
+        document.getElementById('ok-time').textContent = '申請完了 ✓'
+        document.getElementById('ok-msg').textContent  = '確認後に反映されます 🌸'
+        show('v-ok')
+    } catch(e) { alert('エラー: ' + e.message) }
 }
 
 async function submitRequest() {
