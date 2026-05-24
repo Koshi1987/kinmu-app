@@ -245,17 +245,17 @@
             </div>
             <div class="print-note" id="pn-shifts"></div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">
-                <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">日勤</span>
+                <span style="background:#ffffff;padding:3px 10px;border-radius:4px;border:1px solid #e5e7eb">日勤</span>
                 <span style="background:#fef9c3;padding:3px 10px;border-radius:4px">午前</span>
-                <span style="background:#ede9fe;padding:3px 10px;border-radius:4px">午後</span>
-                <span style="background:#d1fae5;padding:3px 10px;border-radius:4px">変則</span>
-                <span style="background:#fed7aa;padding:3px 10px;border-radius:4px">春夏</span>
+                <span style="background:#d1fae5;padding:3px 10px;border-radius:4px">午後</span>
+                <span style="background:#ede9fe;padding:3px 10px;border-radius:4px">変則</span>
+                <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">春夏</span>
                 <span style="background:#fce7f3;padding:3px 10px;border-radius:4px">有給</span>
                 <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">AM有休</span>
-                <span style="background:#f9a8d4;padding:3px 10px;border-radius:4px">PM有休</span>
-                <span style="background:#fda4af;padding:3px 10px;border-radius:4px">時間有給</span>
-                <span style="background:#fef08a;padding:3px 10px;border-radius:4px">研修</span>
-                <span style="background:#f1f5f9;padding:3px 10px;border-radius:4px">休</span>
+                <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">PM有休</span>
+                <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">時間有給</span>
+                <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">研修</span>
+                <span style="background:#fce7f3;padding:3px 10px;border-radius:4px">休</span>
                 <small style="color:#9ca3af;padding:3px 0">（セルをクリックで変更）</small>
             </div>
             <div id="shift-tbl-monthly"></div>
@@ -317,6 +317,18 @@
             </div>
             <div class="sec-hd"><span class="sec-title">職員一覧</span></div>
             <div id="emp-list-admin"></div>
+
+            <!-- 有給管理 -->
+            <div style="margin-top:28px">
+                <div class="sec-hd">
+                    <span class="sec-title">有給管理</span>
+                    <button class="btn btn-ghost" onclick="loadLeaveBalances()">🔄 更新</button>
+                </div>
+                <div style="font-size:13px;color:#6b7280;margin-bottom:12px">
+                    「付与日数」を入力すると残日数が自動計算されます。使用日数は承認済みの申請から自動集計します。
+                </div>
+                <div id="leave-table"><div class="loading">読み込み中…</div></div>
+            </div>
         </div>
 
         <!-- QRコード -->
@@ -346,17 +358,17 @@ let weekOffset = 0, shiftMonthOffset = 0
 
 const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','時間有給','研修','休']
 const SHIFT_COLORS = {
-    '日勤':    '#bfdbfe',   // 青
+    '日勤':    '#ffffff',   // 白
     '午前':    '#fef9c3',   // 黄
-    '午後':    '#ede9fe',   // 薄紫
-    '変則':    '#d1fae5',   // 薄緑
-    '春夏':    '#fed7aa',   // オレンジ
+    '午後':    '#d1fae5',   // パステルグリーン
+    '変則':    '#ede9fe',   // 薄紫
+    '春夏':    '#bfdbfe',   // 青
     '有給':    '#fce7f3',   // 薄ピンク
     'AM有休':  '#fbcfe8',   // ピンク
-    'PM有休':  '#f9a8d4',   // ピンク（中）
-    '時間有給':'#fda4af',   // ローズ
-    '研修':    '#fef08a',   // 黄緑
-    '休':      '#f1f5f9',   // グレー
+    'PM有休':  '#fbcfe8',   // ピンク（AM有休と統一）
+    '時間有給':'#fbcfe8',   // ピンク（AM有休と統一）
+    '研修':    '#bfdbfe',   // 青（春夏と同色）
+    '休':      '#fce7f3',   // 薄ピンク（有給と同色）
 }
 // 各シフトの所定労働時間（時間）
 const SHIFT_HOURS = {
@@ -398,7 +410,7 @@ function switchTab(name) {
     )
     document.querySelector('.content').style.maxWidth = (name === 'shifts') ? 'none' : ''
     if (name === 'today')     loadToday()
-    if (name === 'employees') renderEmployees()
+    if (name === 'employees') { renderEmployees(); loadLeaveBalances() }
     if (name === 'qr')        renderQR()
     if (name === 'shifts')    loadShiftsMonthly()
     if (name === 'requests')  loadRequests()
@@ -819,6 +831,71 @@ async function deleteEmployee(id, name) {
     await db.from('employees').update({ active: false }).eq('id', id)
     await loadMaster()
     renderEmployees()
+}
+
+// ---- 有給管理 ----
+async function loadLeaveBalances() {
+    const el = document.getElementById('leave-table')
+    if (!el) return
+    el.innerHTML = '<div class="loading">読み込み中…</div>'
+
+    // 今年度の承認済み有給申請を集計
+    const thisYear = new Date().getFullYear()
+    const { data: reqs } = await db.from('shift_requests')
+        .select('employee_id, requested_type, requested_hours, status')
+        .eq('status', 'approved')
+        .in('requested_type', ['有給','AM有休','PM有休','時間有給'])
+
+    // 使用日数を集計（有給=1日、AM/PM有休=0.5日、時間有給=時間/8日）
+    const usedMap = {}
+    for (const r of reqs || []) {
+        if (!usedMap[r.employee_id]) usedMap[r.employee_id] = 0
+        if (r.requested_type === '有給')       usedMap[r.employee_id] += 1
+        else if (r.requested_type === 'AM有休') usedMap[r.employee_id] += 0.5
+        else if (r.requested_type === 'PM有休') usedMap[r.employee_id] += 0.5
+        else if (r.requested_type === '時間有給') usedMap[r.employee_id] += (r.requested_hours || 0) / 8
+    }
+
+    let html = `<table style="width:100%;border-collapse:collapse;background:white;border-radius:12px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.07)">
+        <thead><tr>
+            <th style="text-align:left;padding:10px 14px;background:#f8fafc;font-size:13px">氏名</th>
+            <th style="text-align:center;padding:10px 8px;background:#f8fafc;font-size:13px;min-width:90px">付与日数</th>
+            <th style="text-align:center;padding:10px 8px;background:#e0f2fe;font-size:13px;min-width:80px">使用日数</th>
+            <th style="text-align:center;padding:10px 8px;background:#dcfce7;font-size:13px;min-width:80px">残日数</th>
+        </tr></thead><tbody>`
+
+    for (const team of teams) {
+        const te = employees.filter(e => e.team_id === team.id)
+        if (!te.length) continue
+        html += `<tr><td colspan="4" style="background:#f1f5f9;font-size:12px;font-weight:700;padding:6px 14px;color:#374151">${team.name}</td></tr>`
+        for (const emp of te) {
+            const granted = emp.paid_leave_days || 0
+            const used    = Math.round((usedMap[emp.id] || 0) * 10) / 10
+            const remain  = Math.round((granted - used) * 10) / 10
+            const remColor = remain < 5 ? '#dc2626' : remain < 10 ? '#d97706' : '#15803d'
+            html += `<tr style="border-bottom:1px solid #f3f4f6">
+                <td style="padding:10px 14px;font-size:14px;font-weight:600">${emp.name}</td>
+                <td style="text-align:center;padding:6px 8px">
+                    <input type="number" value="${granted}" min="0" max="99" step="0.5"
+                        onchange="savePaidLeave('${emp.id}',this.value)"
+                        style="width:70px;padding:5px 8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px;text-align:center">
+                    <span style="font-size:12px;color:#6b7280">日</span>
+                </td>
+                <td style="text-align:center;padding:10px 8px;font-size:14px;color:#1e40af">${used}日</td>
+                <td style="text-align:center;padding:10px 8px;font-size:15px;font-weight:700;color:${remColor}">${remain}日</td>
+            </tr>`
+        }
+    }
+    html += '</tbody></table>'
+    el.innerHTML = html
+}
+
+async function savePaidLeave(empId, days) {
+    const val = parseFloat(days) || 0
+    const { error } = await db.from('employees').update({ paid_leave_days: val }).eq('id', empId)
+    if (error) { alert('エラー: ' + error.message); return }
+    const emp = employees.find(e => e.id === empId)
+    if (emp) emp.paid_leave_days = val
 }
 
 async function editFixedOff(empId, empName) {
