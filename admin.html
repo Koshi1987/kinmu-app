@@ -249,13 +249,13 @@
                 <span style="background:#fef9c3;padding:3px 10px;border-radius:4px">午前</span>
                 <span style="background:#d1fae5;padding:3px 10px;border-radius:4px">午後</span>
                 <span style="background:#ede9fe;padding:3px 10px;border-radius:4px">変則</span>
-                <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">春夏</span>
-                <span style="background:#fce7f3;padding:3px 10px;border-radius:4px">有給</span>
+                <span style="background:#fce7f3;padding:3px 10px;border-radius:4px">一日有給</span>
                 <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">AM有休</span>
                 <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">PM有休</span>
                 <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">時間有給</span>
+                <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">春夏</span>
                 <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">研修</span>
-                <span style="background:#fce7f3;padding:3px 10px;border-radius:4px">休</span>
+                <span style="background:#e0f2fe;padding:3px 10px;border-radius:4px">休</span>
                 <small style="color:#9ca3af;padding:3px 0">（セルをクリックで変更）</small>
             </div>
             <div id="shift-tbl-monthly"></div>
@@ -356,7 +356,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 let employees = [], teams = [], pendingMap = {}
 let weekOffset = 0, shiftMonthOffset = 0
 
-const SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','時間有給','研修','休']
+const SHIFT_TYPES = ['日勤','午前','午後','変則','有給','AM有休','PM有休','時間有給','春夏','研修','休']
 const SHIFT_COLORS = {
     '日勤':    '#ffffff',   // 白
     '午前':    '#fef9c3',   // 黄
@@ -368,7 +368,7 @@ const SHIFT_COLORS = {
     'PM有休':  '#fbcfe8',   // ピンク（AM有休と統一）
     '時間有給':'#fbcfe8',   // ピンク（AM有休と統一）
     '研修':    '#bfdbfe',   // 青（春夏と同色）
-    '休':      '#fce7f3',   // 薄ピンク（有給と同色）
+    '休':      '#e0f2fe',   // 薄水色
 }
 // 各シフトの所定労働時間（時間）
 const SHIFT_HOURS = {
