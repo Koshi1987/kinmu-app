@@ -663,7 +663,8 @@ async function loadShiftsMonthly() {
             for (const { dow, ds } of days) {
                 const key = `${emp.id}_${ds}`
                 const isWknd = dow===0 || dow===6
-                const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd ? '休' : (emp.default_shift || '日勤'))
+                const fixedOff = (emp.fixed_off_days || []).includes(dow)
+                const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd || fixedOff ? '休' : (emp.default_shift || '日勤'))
                 const bg = SHIFT_COLORS[st] || '#fff'
 
                 if (teamFilter === 'all') {
@@ -676,7 +677,7 @@ async function loadShiftsMonthly() {
                     if (hasCO && ds <= today) {
                         // 実績あり → タイムカードから計算
                         const { regular, overtime } = calcActualDayHours(recs)
-                        totalHours += regular
+                        totalHours += regular + overtime  // 月合計＝残業込みの実働時間
                         totalOT    += overtime
                     } else {
                         // 実績なし（未来日 or 未打刻）→ 予定シフト時間
@@ -771,12 +772,14 @@ function renderEmployees() {
                         style="padding:5px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;background:#f8fafc;cursor:pointer">
                         ${opts}
                     </select>
+                    <button class="btn btn-ghost btn-sm" onclick="editFixedOff('${emp.id}','${emp.name}')">🗓 固定休</button>
                     <div class="emp-actions">
                         <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',-1)">↑</button>
                         <button class="btn btn-ghost btn-sm" onclick="moveEmployee('${emp.id}',1)">↓</button>
                         <button class="btn btn-danger btn-sm" onclick="deleteEmployee('${emp.id}','${emp.name}')">削除</button>
                     </div>
                 </div>
+                ${(emp.fixed_off_days||[]).length ? `<div style="font-size:11px;color:#6b7280;margin-top:4px">🗓 固定休: ${(emp.fixed_off_days||[]).map(d=>['日','月','火','水','木','金','土'][d]).join('・')}曜</div>` : ''}
             </div>`
         }
     }
@@ -818,6 +821,39 @@ async function deleteEmployee(id, name) {
     renderEmployees()
 }
 
+async function editFixedOff(empId, empName) {
+    const DAY_NAMES = ['日','月','火','水','木','金','土']
+    const emp = employees.find(e => e.id === empId)
+    const current = emp ? (emp.fixed_off_days || []) : []
+    const checks = DAY_NAMES.map((n, i) =>
+        `<label style="display:inline-flex;align-items:center;gap:4px;margin:4px 8px 4px 0;font-size:15px;cursor:pointer">
+            <input type="checkbox" value="${i}" ${current.includes(i)?'checked':''} style="width:16px;height:16px"> ${n}曜
+        </label>`
+    ).join('')
+    const div = document.createElement('div')
+    div.innerHTML = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:9999;display:flex;align-items:center;justify-content:center">
+        <div style="background:white;border-radius:16px;padding:24px;max-width:340px;width:90%;box-shadow:0 8px 30px rgba(0,0,0,.2)">
+            <div style="font-size:16px;font-weight:700;margin-bottom:12px">🗓 ${empName}　固定休日</div>
+            <div style="margin-bottom:18px">${checks}</div>
+            <div style="display:flex;gap:10px">
+                <button id="fixoff-ok" class="btn btn-primary" style="flex:1">保存</button>
+                <button id="fixoff-cancel" class="btn btn-ghost" style="flex:1">キャンセル</button>
+            </div>
+        </div>
+    </div>`
+    document.body.appendChild(div)
+    div.querySelector('#fixoff-cancel').onclick = () => document.body.removeChild(div)
+    div.querySelector('#fixoff-ok').onclick = async () => {
+        const selected = [...div.querySelectorAll('input[type=checkbox]:checked')].map(c => parseInt(c.value))
+        const { error } = await db.from('employees').update({ fixed_off_days: selected }).eq('id', empId)
+        if (error) { alert('エラー: ' + error.message); return }
+        if (emp) emp.fixed_off_days = selected
+        document.body.removeChild(div)
+        renderEmployees()
+        showMsg('emp-msg', '固定休日を更新しました ✓', true)
+    }
+}
+
 async function updateDefaultShift(empId, newShift) {
     const { error } = await db.from('employees').update({ default_shift: newShift }).eq('id', empId)
     if (error) { alert('エラー: ' + error.message); return }
@@ -832,7 +868,11 @@ async function checkPendingBadge() {
         const { data } = await db.from('shift_requests').select('id').eq('status', 'pending')
         const count = (data || []).length
         const btn = document.getElementById('tab-btn-requests')
-        if (btn) btn.textContent = count ? `📬 申請確認（${count}）` : '📬 申請確認'
+        if (btn) {
+            btn.textContent = count ? `🔴 申請確認（${count}件）` : '📬 申請確認'
+            btn.style.color  = count ? '#dc2626' : ''
+            btn.style.fontWeight = count ? '700' : ''
+        }
     } catch(e) {}
 }
 
@@ -910,7 +950,9 @@ async function loadRequests() {
 
     // タブに未確認バッジを表示
     const btn = document.getElementById('tab-btn-requests')
-    btn.textContent = pending.length ? `📬 申請確認（${pending.length}）` : '📬 申請確認'
+    btn.textContent  = pending.length ? `🔴 申請確認（${pending.length}件）` : '📬 申請確認'
+    btn.style.color  = pending.length ? '#dc2626' : ''
+    btn.style.fontWeight = pending.length ? '700' : ''
 }
 
 async function approveRequest(id, empId, date, type) {
