@@ -376,6 +376,48 @@ const SHIFT_HOURS = {
     '有給':8, 'AM有休':8, 'PM有休':8, '時間有給':8, '研修':8, '休':0
 }
 
+// 国民の祝日（2025〜2026年）
+const HOLIDAYS = new Set([
+    // 2025年
+    '2025-01-01', // 元日
+    '2025-01-13', // 成人の日
+    '2025-02-11', // 建国記念の日
+    '2025-02-23', // 天皇誕生日
+    '2025-02-24', // 振替休日
+    '2025-03-20', // 春分の日
+    '2025-04-29', // 昭和の日
+    '2025-05-03', // 憲法記念日
+    '2025-05-04', // みどりの日
+    '2025-05-05', // こどもの日
+    '2025-07-21', // 海の日
+    '2025-08-11', // 山の日
+    '2025-09-15', // 敬老の日
+    '2025-09-23', // 秋分の日
+    '2025-10-13', // スポーツの日
+    '2025-11-03', // 文化の日
+    '2025-11-23', // 勤労感謝の日
+    '2025-11-24', // 振替休日
+    // 2026年
+    '2026-01-01', // 元日
+    '2026-01-12', // 成人の日
+    '2026-02-11', // 建国記念の日
+    '2026-02-23', // 天皇誕生日
+    '2026-03-20', // 春分の日
+    '2026-04-29', // 昭和の日
+    '2026-05-03', // 憲法記念日
+    '2026-05-04', // みどりの日
+    '2026-05-05', // こどもの日
+    '2026-05-06', // 振替休日
+    '2026-07-20', // 海の日
+    '2026-08-11', // 山の日
+    '2026-09-21', // 敬老の日
+    '2026-09-22', // 秋分の日（国民の休日）
+    '2026-09-23', // 秋分の日
+    '2026-10-12', // スポーツの日
+    '2026-11-03', // 文化の日
+    '2026-11-23', // 勤労感謝の日
+])
+
 // ---- パスワード ----
 function checkPw() {
     if (document.getElementById('pw-input').value === ADMIN_PASSWORD) {
@@ -646,9 +688,11 @@ async function loadShiftsMonthly() {
 
     const colCount = teamFilter === 'all' ? lastDay + 3 : lastDay + 4
     let hdr = '<th style="min-width:72px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:13px">名前</th>'
-    for (const { d, dow } of days) {
-        const bg = dow===0 ? '#fee2e2' : dow===6 ? '#dbeafe' : '#f8fafc'
-        hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
+    for (const { d, dow, ds } of days) {
+        const isHol = HOLIDAYS.has(ds)
+        const bg = (dow===0 || isHol) ? '#fee2e2' : dow===6 ? '#dbeafe' : '#f8fafc'
+        const holMark = isHol && dow!==0 ? '<br><span style="font-size:9px;color:#dc2626">祝</span>' : ''
+        hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}${holMark}</th>`
     }
     hdr += `<th style="background:#e0f2fe;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">月合計</th>`
     hdr += `<th style="background:#f0fdf4;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">週平均</th>`
@@ -676,7 +720,8 @@ async function loadShiftsMonthly() {
                 const key = `${emp.id}_${ds}`
                 const isWknd = dow===0 || dow===6
                 const fixedOff = (emp.fixed_off_days || []).includes(dow)
-                const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd || fixedOff ? '休' : (emp.default_shift || '日勤'))
+                const isHoliday = HOLIDAYS.has(ds)
+                const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd || fixedOff || isHoliday ? '休' : (emp.default_shift || '日勤'))
                 const bg = SHIFT_COLORS[st] || '#fff'
 
                 if (teamFilter === 'all') {
