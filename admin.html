@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理画面</title>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif; background: #f5f7fa; }
@@ -100,6 +101,10 @@
         .sub-tab:hover:not(.active) { color: #374151; }
 
         @media print {
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
             @page { size: A4 portrait; margin: 10mm; }  /* デフォルト縦（シフト表はJSで横に切り替え） */
             header, .tabs, .sub-tabs, .sec-hd .btn, .sec-hd select, .form-row, .hd-btn,
             #shift-legend, .sec-hd .week-nav button { display: none !important; }
@@ -119,7 +124,7 @@
             }
             /* テーブルをA4横に100%フィット */
             #shift-tbl-monthly table {
-                font-size: 7.5pt !important;
+                font-size: 9pt !important;
                 width: 100% !important;
                 table-layout: fixed !important;
             }
@@ -127,15 +132,18 @@
             #shift-tbl-monthly th,
             #shift-tbl-monthly td {
                 padding: 1px 2px !important;
-                font-size: 7.5pt !important;
+                font-size: 9pt !important;
                 min-width: 0 !important;
                 overflow: hidden !important;
             }
             /* 名前列：固定幅・sticky解除 */
             #shift-tbl-monthly th:first-child,
             #shift-tbl-monthly td:first-child {
-                width: 13% !important;
+                width: 8% !important;
                 position: static !important;
+                min-width: 0 !important;
+                max-width: none !important;
+                font-size: 8pt !important;
             }
         }
 
@@ -255,7 +263,7 @@
                 <span style="background:#fbcfe8;padding:3px 10px;border-radius:4px">時間有給</span>
                 <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">春夏</span>
                 <span style="background:#bfdbfe;padding:3px 10px;border-radius:4px">研修</span>
-                <span style="background:#e0f2fe;padding:3px 10px;border-radius:4px">休</span>
+                <span style="background:#fff0f3;padding:3px 10px;border-radius:4px">休</span>
                 <small style="color:#9ca3af;padding:3px 0">（セルをクリックで変更）</small>
             </div>
             <div id="shift-tbl-monthly"></div>
@@ -267,6 +275,27 @@
                 <span class="sec-title">シフト変更申請</span>
                 <button class="btn btn-ghost" onclick="loadRequests()">🔄 更新</button>
                 <button class="btn btn-ghost" onclick="toggleAdminFix()">✏️ 手動打刻補正</button>
+                <button class="btn btn-ghost" onclick="toggleAdminNak()">🚶 手動中抜け入力</button>
+            </div>
+
+            <!-- 管理者手動中抜けフォーム -->
+            <div id="admin-nak-form" style="display:none;background:white;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-left:4px solid #fb923c">
+                <div style="font-size:15px;font-weight:700;margin-bottom:14px">🚶 管理者による中抜け入力（直接入力・減給扱い）</div>
+                <div class="form-row">
+                    <select id="anak-emp" style="min-width:120px"></select>
+                    <input type="date" id="anak-date">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+                    <label style="font-size:13px;color:#6b7280">🚶 外出した時間<br>
+                        <input type="time" id="anak-start" style="width:100%;margin-top:4px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px">
+                    </label>
+                    <label style="font-size:13px;color:#6b7280">🏃 戻ってきた時間<br>
+                        <input type="time" id="anak-end" style="width:100%;margin-top:4px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:14px">
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="adminNakamuke()">中抜けを保存</button>
+                <button class="btn btn-danger" onclick="deleteShiftRequest()" style="margin-left:8px">🗑️ この日の有給・研修・中抜け申請を削除</button>
+                <span id="anak-msg" style="font-size:13px;margin-left:12px"></span>
             </div>
 
             <!-- 管理者手動打刻補正フォーム -->
@@ -291,6 +320,7 @@
                     </label>
                 </div>
                 <button class="btn btn-primary" onclick="adminCorrect()">補正を保存</button>
+                <button class="btn btn-danger" onclick="deleteAttendance()" style="margin-left:8px">🗑️ この日の打刻を全削除</button>
                 <span id="afix-msg" style="font-size:13px;margin-left:12px"></span>
             </div>
 
@@ -368,7 +398,7 @@ const SHIFT_COLORS = {
     'PM有休':  '#fbcfe8',   // ピンク（AM有休と統一）
     '時間有給':'#fbcfe8',   // ピンク（AM有休と統一）
     '研修':    '#bfdbfe',   // 青（春夏と同色）
-    '休':      '#e0f2fe',   // 薄水色
+    '休':      '#fff0f3',   // 薄水色
 }
 // 各シフトの所定労働時間（時間）
 const SHIFT_HOURS = {
@@ -540,12 +570,22 @@ async function loadToday() {
 async function loadRecords() {
     const date = document.getElementById('rec-date').value
     if (!date) return alert('日付を選択してください')
-    const { data } = await db.from('attendance').select('*').eq('date', date).order('timestamp')
+
+    const [{ data }, { data: reqData }] = await Promise.all([
+        db.from('attendance').select('*').eq('date', date).order('timestamp'),
+        db.from('shift_requests').select('*').eq('date', date).eq('status', 'approved')
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け'])
+    ])
 
     const empAtt = {}
     for (const r of data || []) {
         if (!empAtt[r.employee_id]) empAtt[r.employee_id] = []
         empAtt[r.employee_id].push(r)
+    }
+    const leaveMap = {}, nakamMap = {}
+    for (const r of reqData || []) {
+        if (r.requested_type === '中抜け') nakamMap[r.employee_id] = r
+        else leaveMap[r.employee_id] = r
     }
 
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
@@ -554,30 +594,41 @@ async function loadRecords() {
     for (const team of teams) {
         const te = employees.filter(e => e.team_id === team.id)
         if (!te.length) continue
-        rows += `<tr class="team-row"><td colspan="7">${team.name}</td></tr>`
+        rows += `<tr class="team-row"><td colspan="9">${team.name}</td></tr>`
         for (const emp of te) {
             const recs = (empAtt[emp.id] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
             const ci = recs.find(r => r.type === 'clock_in')
             const bs = recs.find(r => r.type === 'break_start')
             const be = recs.find(r => r.type === 'break_end')
             const co = [...recs].reverse().find(r => r.type === 'clock_out')
-            const mins = calcMins(recs)
+            const { label: leaveLabel, mins: leaveMins }   = calcLeave(leaveMap[emp.id])
+            const { label: nakLabel,  mins: nakMins }      = calcNakamuke(nakamMap[emp.id])
+            const totalMins = calcMins(recs) + leaveMins - nakMins
             const ot = calcOvertime(recs)
+            if (!ci && !co && !leaveLabel && !nakLabel) continue
+            const leaveBadge = leaveLabel
+                ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>`
+                : '-'
+            const nakBadge = nakLabel
+                ? `<span style="background:#fed7aa;color:#9a3412;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:600">${nakLabel}</span>`
+                : '-'
             rows += `<tr>
                 <td><strong>${emp.name}</strong></td>
                 <td>${ci ? fmt(ci.timestamp) : '-'}</td>
                 <td>${bs ? fmt(bs.timestamp) : '-'}</td>
                 <td>${be ? fmt(be.timestamp) : '-'}</td>
                 <td>${co ? fmt(co.timestamp) : '-'}</td>
-                <td>${mins > 0 ? toHHMM(mins) : '-'}</td>
+                <td>${totalMins > 0 ? toHHMM(totalMins) : '-'}</td>
                 <td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td>
+                <td>${leaveBadge}</td>
+                <td>${nakBadge}</td>
             </tr>`
         }
     }
-    if (!rows) rows = '<tr><td colspan="7" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    if (!rows) rows = '<tr><td colspan="9" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
     document.getElementById('rec-tbl').innerHTML = `
         <table>
-            <thead><tr><th>名前</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th></tr></thead>
+            <thead><tr><th>名前</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th><th style="color:#9d174d">有給</th><th style="color:#9a3412">中抜け</th></tr></thead>
             <tbody>${rows}</tbody>
         </table>`
 }
@@ -666,14 +717,35 @@ async function loadShiftsMonthly() {
     }
 
     // チーム別表示の場合は実績データも取得
-    let attMap = {} // { empId_date: [records...] }
+    let attMap      = {} // { empId_date: [records...] }
+    let nakMap      = {} // { empId_date: nakamukeMins }
+    let leaveHrsMap = {} // { empId_date: leave hours（打刻と併用するAM/PM/時間有給） }
     if (teamFilter !== 'all') {
-        const { data: attData } = await db.from('attendance')
-            .select('*').gte('date', from).lte('date', to).order('timestamp')
+        const [{ data: attData }, { data: nakData }, { data: leaveData }] = await Promise.all([
+            db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp'),
+            db.from('shift_requests').select('*').gte('date', from).lte('date', to)
+                .eq('status', 'approved').eq('requested_type', '中抜け'),
+            db.from('shift_requests').select('*').gte('date', from).lte('date', to)
+                .eq('status', 'approved').in('requested_type', ['AM有休','PM有休','時間有給'])
+        ])
         for (const r of attData || []) {
             const k = `${r.employee_id}_${r.date}`
             if (!attMap[k]) attMap[k] = []
             attMap[k].push(r)
+        }
+        for (const r of nakData || []) {
+            try {
+                const d = JSON.parse(r.reason || '{}')
+                if (d.break_start && d.break_end) {
+                    const toM = s => { const [h,m] = s.split(':').map(Number); return h*60+m }
+                    nakMap[`${r.employee_id}_${r.date}`] = Math.max(0, toM(d.break_end) - toM(d.break_start))
+                }
+            } catch(e) {}
+        }
+        // AM有休・PM有休・時間有給は打刻と併用するため別途加算
+        for (const r of leaveData || []) {
+            const { mins } = calcLeave(r)
+            if (mins > 0) leaveHrsMap[`${r.employee_id}_${r.date}`] = mins / 60
         }
     }
 
@@ -686,7 +758,10 @@ async function loadShiftsMonthly() {
         days.push({ d, dow: date.getDay(), ds: `${month}-${String(d).padStart(2,'0')}` })
     }
 
-    const colCount = teamFilter === 'all' ? lastDay + 3 : lastDay + 4
+    const TARGET_NAMES_CHECK = ['川平', '藤沢', '名取']
+    const hasTargetEmps = teamFilter !== 'all' &&
+        displayEmps.some(e => TARGET_NAMES_CHECK.some(n => e.name.includes(n)))
+    const colCount = teamFilter === 'all' ? lastDay + 3 : hasTargetEmps ? lastDay + 5 : lastDay + 4
     let hdr = '<th style="min-width:72px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:13px">名前</th>'
     for (const { d, dow, ds } of days) {
         const isHol = HOLIDAYS.has(ds)
@@ -694,15 +769,20 @@ async function loadShiftsMonthly() {
         const holMark = isHol && dow!==0 ? '<br><span style="font-size:9px;color:#dc2626">祝</span>' : ''
         hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}${holMark}</th>`
     }
-    hdr += `<th style="background:#e0f2fe;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">月合計</th>`
+    hdr += `<th style="background:#fff0f3;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">月合計</th>`
     hdr += `<th style="background:#f0fdf4;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">週平均</th>`
     if (teamFilter !== 'all') {
         hdr += `<th style="background:#fef3c7;min-width:52px;text-align:center;font-size:12px;padding:3px 4px">残業計</th>`
+    }
+    if (hasTargetEmps) {
+        hdr += `<th style="background:#fce7f3;min-width:58px;text-align:center;font-size:11px;padding:3px 4px;color:#9d174d;font-weight:700">実勤務<br><span style="font-size:9px">有休除</span></th>`
     }
 
     const LEGEND = `【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00　5.春夏勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
     const today = new Date().toLocaleDateString('sv-SE')
 
+    const TARGET_NAMES = TARGET_NAMES_CHECK  // 上部で定義済み
+    const targetEmpHours = {}
     let rows = ''
     for (const team of teams) {
         const te = displayEmps.filter(e => e.team_id === team.id)
@@ -714,6 +794,7 @@ async function loadShiftsMonthly() {
             const roleTag = (teamFilter !== 'all' && emp.role) ? `<br><span style="font-size:10px;font-weight:400;color:#6b7280;line-height:1.3">${emp.role}</span>` : ''
             let cells = `<td style="white-space:normal;word-break:break-all;font-weight:600;position:sticky;left:0;background:white;z-index:1;padding:5px 8px;font-size:13px;min-width:64px;max-width:80px;line-height:1.4">${emp.name}${roleTag}</td>`
             let totalHours = 0
+            let totalHoursExcLeave = 0  // 有休を除いた実勤務時間（対象3人用）
             let totalOT = 0   // 残業合計（時間）
 
             for (const { dow, ds } of days) {
@@ -732,29 +813,46 @@ async function loadShiftsMonthly() {
                     const recs = attMap[key] || []
                     const hasCO = recs.some(r => r.type === 'clock_out')
                     if (hasCO && ds <= today) {
-                        // 実績あり → タイムカードから計算
-                        const { regular, overtime } = calcActualDayHours(recs)
-                        totalHours += regular + overtime  // 月合計＝残業込みの実働時間
-                        totalOT    += overtime
-                    } else {
-                        // 実績なし（未来日 or 未打刻）→ 予定シフト時間
-                        totalHours += SHIFT_HOURS[st] || 0
+                        // 実績あり → タイムカードから計算（中抜け差し引き）
+                        const { regular, overtime } = calcActualDayHours(recs, nakMap[key] || 0)
+                        const leaveH = leaveHrsMap[key] || 0  // AM有休・PM有休・時間有給の分を加算
+                        totalHours         += regular + overtime + leaveH
+                        totalHoursExcLeave += regular + overtime  // 有休分は含めない
+                        totalOT            += overtime
+                    } else if (ds <= today) {
+                        // 過去日・打刻なし → 有給・研修など休暇系のみ計上
+                        const leaveTypes = ['有給','AM有休','PM有休','時間有給','研修']
+                        if (leaveTypes.includes(st)) {
+                            totalHours += SHIFT_HOURS[st] || 0
+                            // totalHoursExcLeave には加算しない（有休日は除外）
+                        }
+                        // 打刻忘れ・通常勤務で未打刻の日は 0（計上しない）
                     }
+                    // ds > today（未来日）→ 何も加算しない（0スタート）
                 }
 
                 cells += `<td onclick="cycleShift('${emp.id}','${ds}','${st}')"
                     style="background:${bg};text-align:center;font-size:12px;cursor:pointer;padding:3px 2px;border:1px solid #f0f0f0">${st}</td>`
             }
 
+            const isTarget = TARGET_NAMES_CHECK.some(n => emp.name.includes(n))
+            if (isTarget) targetEmpHours[emp.name] = totalHoursExcLeave  // 175hチェックは有休除きで判定
             const weeklyAvg = (totalHours / (lastDay / 7)).toFixed(1)
             const totalDisp = teamFilter === 'all'
                 ? `${totalHours}h`
                 : `${totalHours.toFixed(1)}h`
-            cells += `<td style="background:#e0f2fe;text-align:center;font-size:12px;font-weight:600;padding:3px 4px;border:1px solid #bae6fd">${totalDisp}</td>`
+            cells += `<td style="background:#fff0f3;text-align:center;font-size:12px;font-weight:600;padding:3px 4px;border:1px solid #bae6fd">${totalDisp}</td>`
             cells += `<td style="background:#f0fdf4;text-align:center;font-size:12px;font-weight:600;padding:3px 4px;border:1px solid #bbf7d0">${weeklyAvg}h</td>`
             if (teamFilter !== 'all') {
                 const otDisp = totalOT > 0 ? `${totalOT.toFixed(1)}h` : '-'
                 cells += `<td style="background:#fef3c7;text-align:center;font-size:12px;font-weight:600;padding:3px 4px;border:1px solid #fde68a;color:${totalOT>0?'#92400e':'#9ca3af'}">${otDisp}</td>`
+            }
+            if (hasTargetEmps) {
+                if (isTarget) {
+                    cells += `<td style="background:#fce7f3;text-align:center;font-size:12px;font-weight:700;padding:3px 4px;border:1px solid #f9a8d4;color:#9d174d">${totalHoursExcLeave.toFixed(1)}h</td>`
+                } else {
+                    cells += `<td style="background:#fafafa;text-align:center;font-size:12px;padding:3px 4px;color:#d1d5db">-</td>`
+                }
             }
             rows += `<tr>${cells}</tr>`
         }
@@ -763,25 +861,56 @@ async function loadShiftsMonthly() {
         }
     }
 
+    // 175時間チェック（川平・藤沢・名取の合計）※有休除きの実勤務時間で判定
+    if (Object.keys(targetEmpHours).length > 0) {
+        const combined    = Object.values(targetEmpHours).reduce((a, b) => a + b, 0)
+        const isShort     = combined < 175
+        const dispTotal   = teamFilter === 'all' ? `${combined}h` : `${combined.toFixed(1)}h`
+        const shortBy     = 175 - combined
+        const dispShort   = teamFilter === 'all' ? `${shortBy}h` : `${shortBy.toFixed(1)}h`
+        const color       = isShort ? '#dc2626' : '#15803d'
+        const bgColor     = isShort ? '#fef2f2' : '#f0fdf4'
+        const borderColor = isShort ? '#fca5a5' : '#86efac'
+        const detail      = Object.entries(targetEmpHours)
+            .map(([n, h]) => `${n}: ${teamFilter === 'all' ? h + 'h' : h.toFixed(1) + 'h'}`).join('　')
+        rows += `<tr style="border-top:3px solid ${borderColor}">
+            <td style="position:sticky;left:0;background:${bgColor};padding:6px 8px;font-size:12px;font-weight:700;color:${color};white-space:nowrap;z-index:1">
+                ${isShort ? '⚠️' : '✅'} 3人合計<br><span style="font-size:9px;font-weight:400">有休除き</span>
+            </td>
+            <td colspan="${colCount - 1}" style="background:${bgColor};font-size:12px;font-weight:700;color:${color};padding:6px 12px">
+                ${dispTotal} / 175h　${isShort ? `⚠️ あと ${dispShort} 不足` : '✅ 達成'}
+                <span style="font-size:11px;font-weight:400;margin-left:10px;opacity:0.8">（${detail}）</span>
+            </td>
+        </tr>`
+    }
+
     document.getElementById('shift-tbl-monthly').innerHTML =
         `<div style="overflow-x:auto"><table style="border-collapse:collapse;background:white;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07)">
         <thead><tr>${hdr}</tr></thead><tbody>${rows}</tbody></table></div>`
 }
 
 // 1日の実績時間を計算（正規時間・残業時間を返す）
-function calcActualDayHours(recs) {
+function calcActualDayHours(recs, nakamukeMins = 0) {
     const sorted = [...recs].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     const ci = sorted.find(r => r.type === 'clock_in')
     const co = [...sorted].reverse().find(r => r.type === 'clock_out')
     if (!ci || !co) return { regular: 0, overtime: 0 }
-    const start = new Date(ci.timestamp)
-    const end   = new Date(co.timestamp)
+    // 9:00より早い打刻は9:00からカウント
+    const rawStart = new Date(ci.timestamp)
+    const nineAM   = new Date(rawStart); nineAM.setHours(9, 0, 0, 0)
+    const start    = rawStart < nineAM ? nineAM : rawStart
+    const end      = new Date(co.timestamp)
     // 休憩時間
     let breakMs = 0
     const bs = sorted.find(r => r.type === 'break_start')
     const be = sorted.find(r => r.type === 'break_end')
     if (bs && be) breakMs = new Date(be.timestamp) - new Date(bs.timestamp)
-    const totalMin = (end - start) / 60000 - breakMs / 60000
+    // 7時間以上の勤務は最低60分の休憩を保証（取れなくても差し引く）
+    const elapsedMin   = (end - start) / 60000 - nakamukeMins
+    const actualBrkMin = breakMs / 60000
+    const minBreak     = elapsedMin >= 420 ? 60 : 0
+    const effBrkMin    = Math.max(minBreak, actualBrkMin)
+    const totalMin     = elapsedMin - effBrkMin
     // 18:00以降が残業
     const base18 = new Date(end); base18.setHours(18, 0, 0, 0)
     const otMin  = end > base18 ? (end - base18) / 60000 : 0
@@ -824,6 +953,10 @@ function renderEmployees() {
                     <div class="team-lbl">${emp.teams?.name || ''}${emp.role ? '　' + emp.role : ''}</div>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <label style="font-size:12px;color:#6b7280;white-space:nowrap">役職:</label>
+                    <input type="text" value="${emp.role || ''}" placeholder="例: C・保育士"
+                        onchange="updateRole('${emp.id}',this.value)"
+                        style="width:110px;padding:5px 8px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:12px;background:#f8fafc">
                     <label style="font-size:12px;color:#6b7280;white-space:nowrap">基本勤務:</label>
                     <select onchange="updateDefaultShift('${emp.id}',this.value)"
                         style="padding:5px 10px;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;background:#f8fafc;cursor:pointer">
@@ -905,7 +1038,7 @@ async function loadLeaveBalances() {
         <thead><tr>
             <th style="text-align:left;padding:10px 14px;background:#f8fafc;font-size:13px">氏名</th>
             <th style="text-align:center;padding:10px 8px;background:#f8fafc;font-size:13px;min-width:90px">付与日数</th>
-            <th style="text-align:center;padding:10px 8px;background:#e0f2fe;font-size:13px;min-width:80px">使用日数</th>
+            <th style="text-align:center;padding:10px 8px;background:#fff0f3;font-size:13px;min-width:80px">使用日数</th>
             <th style="text-align:center;padding:10px 8px;background:#dcfce7;font-size:13px;min-width:80px">残日数</th>
         </tr></thead><tbody>`
 
@@ -1002,6 +1135,14 @@ async function editFixedOff(empId, empName) {
     }
 }
 
+async function updateRole(empId, role) {
+    const { error } = await db.from('employees').update({ role: role || null }).eq('id', empId)
+    if (error) { alert('エラー: ' + error.message); return }
+    const emp = employees.find(e => e.id === empId)
+    if (emp) emp.role = role || null
+    showMsg('emp-msg', '役職を「' + (role || '未設定') + '」に更新しました ✓', true)
+}
+
 async function updateDefaultShift(empId, newShift) {
     const { error } = await db.from('employees').update({ default_shift: newShift }).eq('id', empId)
     if (error) { alert('エラー: ' + error.message); return }
@@ -1039,8 +1180,9 @@ async function loadRequests() {
     if (pending.length) {
         html += `<div style="font-size:13px;font-weight:700;color:#92400e;margin-bottom:12px">⏳ 未確認（${pending.length}件）</div>`
         for (const r of pending) {
-            const isFix = r.requested_type === '打刻補正'
-            let fixDetail = ''
+            const isFix      = r.requested_type === '打刻補正'
+            const isNakamuke = r.requested_type === '中抜け'
+            let fixDetail = '', nakDetail = ''
             let comment = r.reason || ''
             if (isFix && r.reason) {
                 try {
@@ -1051,10 +1193,21 @@ async function loadRequests() {
                     fixDetail = Object.entries(times).map(([k,v]) => `<span style="background:#fff3e0;padding:2px 8px;border-radius:4px;margin-right:4px;font-weight:600">${labels[k]} ${v}</span>`).join('')
                 } catch(e) {}
             }
-            const borderColor = isFix ? '#f97316' : '#f59e0b'
+            if (isNakamuke && r.reason) {
+                try {
+                    const d = JSON.parse(r.reason)
+                    comment = d.comment || ''
+                    if (d.break_start && d.break_end)
+                        nakDetail = `<span style="background:#fed7aa;padding:2px 8px;border-radius:4px;margin-right:4px;font-weight:600">🚶 外出 ${d.break_start}　🏃 戻り ${d.break_end}</span>`
+                } catch(e) {}
+            }
+            const borderColor = isFix ? '#f97316' : isNakamuke ? '#fb923c' : '#f59e0b'
             const approveBtn  = isFix
                 ? `<button onclick="approveFix('${r.id}')"
                       style="padding:8px 16px;background:#ffedd5;color:#c2410c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認・反映</button>`
+                : isNakamuke
+                ? `<button onclick="approveNakamuke('${r.id}')"
+                      style="padding:8px 16px;background:#ffedd5;color:#c2410c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認</button>`
                 : `<button onclick="approveRequest('${r.id}','${r.employee_id}','${r.date}','${r.requested_type}')"
                       style="padding:8px 16px;background:#dcfce7;color:#15803d;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認</button>`
             html += `<div style="background:white;border-radius:12px;padding:16px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-left:4px solid ${borderColor}">
@@ -1062,8 +1215,9 @@ async function loadRequests() {
                     <div style="flex:1">
                         <div style="font-size:16px;font-weight:600">${r.employees?.name || '-'}</div>
                         <div style="font-size:13px;color:#6b7280;margin-top:4px">${r.date}　<span style="background:${isFix?'#ffedd5':'#fde68a'};padding:2px 8px;border-radius:4px;font-weight:600">${r.requested_type}</span></div>
-                        ${fixDetail ? `<div style="margin-top:8px;line-height:2">${fixDetail}</div>` : ''}
-                        ${comment ? `<div style="font-size:13px;color:#374151;margin-top:6px">💬 ${comment}</div>` : ''}
+                        ${fixDetail  ? `<div style="margin-top:8px;line-height:2">${fixDetail}</div>`  : ''}
+                        ${nakDetail  ? `<div style="margin-top:8px;line-height:2">${nakDetail}</div>`   : ''}
+                        ${comment    ? `<div style="font-size:13px;color:#374151;margin-top:6px">💬 ${comment}</div>` : ''}
                         <div style="font-size:11px;color:#9ca3af;margin-top:6px">${new Date(r.created_at).toLocaleString('ja-JP')}</div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0">
@@ -1083,11 +1237,19 @@ async function loadRequests() {
         for (const r of done.slice(0, 20)) {
             const col  = r.status === 'approved' ? '#15803d' : '#b91c1c'
             const lbl  = r.status === 'approved' ? '✓ 承認済' : '✗ 却下'
+            let doneDetail = ''
+            if (r.requested_type === '中抜け' && r.reason) {
+                try {
+                    const d = JSON.parse(r.reason)
+                    if (d.break_start && d.break_end) doneDetail = ` ${d.break_start}〜${d.break_end}`
+                } catch(e) {}
+            } else if (r.requested_type !== '打刻補正' && r.reason) {
+                doneDetail = ` ${r.reason}`
+            }
             html += `<div style="background:white;border-radius:10px;padding:12px 16px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.05);opacity:0.7;display:flex;justify-content:space-between;align-items:center">
                 <div>
                     <span style="font-weight:600">${r.employees?.name || '-'}</span>
-                    <span style="font-size:13px;color:#6b7280;margin-left:10px">${r.date}　${r.requested_type}${r.requested_hours > 0 ? ' ' + r.requested_hours + '時間' : ''}</span>
-                    ${r.reason ? `<span style="font-size:12px;color:#9ca3af;margin-left:8px">${r.reason}</span>` : ''}
+                    <span style="font-size:13px;color:#6b7280;margin-left:10px">${r.date}　${r.requested_type}${r.requested_hours > 0 ? ' ' + r.requested_hours + '時間' : ''}${doneDetail}</span>
                 </div>
                 <span style="font-size:13px;font-weight:600;color:${col}">${lbl}</span>
             </div>`
@@ -1112,6 +1274,14 @@ async function approveRequest(id, empId, date, type) {
         } else {
             await db.from('shifts').insert({ employee_id: empId, date, shift_type: type })
         }
+        await db.from('shift_requests').update({ status: 'approved' }).eq('id', id)
+        loadRequests()
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+async function approveNakamuke(id) {
+    if (!confirm('この中抜け申請を承認しますか？\n（勤務時間から中抜け時間が差し引かれます）')) return
+    try {
         await db.from('shift_requests').update({ status: 'approved' }).eq('id', id)
         loadRequests()
     } catch(e) { alert('エラー: ' + e.message) }
@@ -1159,6 +1329,96 @@ function toggleAdminFix() {
     }
 }
 
+function toggleAdminNak() {
+    const f = document.getElementById('admin-nak-form')
+    const show = f.style.display === 'none'
+    f.style.display = show ? 'block' : 'none'
+    if (show) {
+        document.getElementById('anak-emp').innerHTML =
+            employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+        document.getElementById('anak-date').value = new Date().toLocaleDateString('sv-SE')
+        document.getElementById('anak-start').value = ''
+        document.getElementById('anak-end').value   = ''
+    }
+}
+
+async function adminNakamuke() {
+    const empId = document.getElementById('anak-emp').value
+    const date  = document.getElementById('anak-date').value
+    const bs    = document.getElementById('anak-start').value
+    const be    = document.getElementById('anak-end').value
+    const msg   = document.getElementById('anak-msg')
+    if (!date)      { msg.textContent = '日付を選択してください'; return }
+    if (!bs || !be) { msg.textContent = '外出時間と戻り時間を入力してください'; return }
+    const emp = employees.find(e => e.id === empId)
+    if (!confirm(`${emp?.name || ''}  ${date}　中抜け ${bs}〜${be} を保存しますか？`)) return
+    try {
+        // 同日の既存中抜けを確認して上書き or 新規
+        const { data: ex } = await db.from('shift_requests')
+            .select('id').eq('employee_id', empId).eq('date', date).eq('requested_type', '中抜け')
+        const payload = {
+            employee_id:    empId,
+            date,
+            requested_type: '中抜け',
+            status:         'approved',
+            reason:         JSON.stringify({ break_start: bs, break_end: be }),
+            requested_hours: 0
+        }
+        if (ex && ex.length > 0) {
+            await db.from('shift_requests').update(payload).eq('id', ex[0].id)
+        } else {
+            await db.from('shift_requests').insert(payload)
+        }
+        msg.textContent = '✓ 保存しました'
+        document.getElementById('anak-start').value = ''
+        document.getElementById('anak-end').value   = ''
+        setTimeout(() => msg.textContent = '', 3000)
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+async function deleteShiftRequest() {
+    const empId = document.getElementById('anak-emp').value
+    const date  = document.getElementById('anak-date').value
+    if (!date) { document.getElementById('anak-msg').textContent = '日付を選択してください'; return }
+    const emp = employees.find(e => e.id === empId)
+
+    // まず該当日の申請内容を確認
+    const { data: existing } = await db.from('shift_requests')
+        .select('requested_type, status')
+        .eq('employee_id', empId).eq('date', date)
+        .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け'])
+
+    if (!existing || existing.length === 0) {
+        document.getElementById('anak-msg').textContent = 'この日の有給・研修・中抜け申請はありません'
+        return
+    }
+    const types = existing.map(r => `${r.requested_type}（${r.status}）`).join('、')
+    if (!confirm(`${emp?.name || ''}  ${date} の以下の申請を全て削除しますか？\n\n${types}`)) return
+
+    try {
+        await db.from('shift_requests').delete()
+            .eq('employee_id', empId).eq('date', date)
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け'])
+        document.getElementById('anak-msg').textContent = '✓ 削除しました'
+        setTimeout(() => document.getElementById('anak-msg').textContent = '', 3000)
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+async function deleteAttendance() {
+    const empId = document.getElementById('afix-emp').value
+    const date  = document.getElementById('afix-date').value
+    if (!date) { document.getElementById('afix-msg').textContent = '日付を選択してください'; return }
+    const emp = employees.find(e => e.id === empId)
+    if (!confirm(`${emp?.name || ''}  ${date} の打刻記録を全て削除しますか？`)) return
+    try {
+        const { error } = await db.from('attendance').delete()
+            .eq('employee_id', empId).eq('date', date)
+        if (error) throw error
+        document.getElementById('afix-msg').textContent = '✓ 削除しました'
+        setTimeout(() => document.getElementById('afix-msg').textContent = '', 3000)
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
 async function adminCorrect() {
     const empId = document.getElementById('afix-emp').value
     const date  = document.getElementById('afix-date').value
@@ -1199,8 +1459,13 @@ function initMonthly() {
     const sel = document.getElementById('monthly-emp')
     sel.innerHTML = employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
     const now = new Date()
-    document.getElementById('monthly-month').value =
-        `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`
+    // 今日が11日以降なら今月、10日以前なら先月を選択（11日〜翌月10日の期間に合わせる）
+    let y = now.getFullYear(), m = now.getMonth() + 1
+    if (now.getDate() <= 10) {
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+        y = prev.getFullYear(); m = prev.getMonth() + 1
+    }
+    document.getElementById('monthly-month').value = `${y}-${String(m).padStart(2,'0')}`
 }
 
 async function loadMonthly() {
@@ -1209,78 +1474,156 @@ async function loadMonthly() {
     if (!empId || !month) return alert('職員と月を選択してください')
     const emp = employees.find(e => e.id === empId)
     const [year, mon] = month.split('-')
-    const from = `${month}-01`
-    const lastDay = new Date(parseInt(year), parseInt(mon), 0).getDate()
-    const to = `${month}-${String(lastDay).padStart(2,'0')}`
+
+    // 期間：選択月の11日〜翌月10日
+    const from = `${month}-11`
+    const nextMonthDate = new Date(parseInt(year), parseInt(mon), 1) // 翌月1日
+    const nextYear = nextMonthDate.getFullYear()
+    const nextMon  = String(nextMonthDate.getMonth() + 1).padStart(2, '0')
+    const to = `${nextYear}-${nextMon}-10`
+
     document.getElementById('pn-monthly-emp').textContent =
-        `${emp.name} ${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
-    const { data } = await db.from('attendance')
-        .select('*').eq('employee_id', empId)
-        .gte('date', from).lte('date', to).order('timestamp')
+        `${emp.name}　${year}年${mon}月11日〜${nextYear}年${nextMon}月10日　印刷日時: ${new Date().toLocaleString('ja-JP')}`
+
+    const [{ data }, { data: reqData }] = await Promise.all([
+        db.from('attendance').select('*').eq('employee_id', empId)
+            .gte('date', from).lte('date', to).order('timestamp'),
+        db.from('shift_requests').select('*').eq('employee_id', empId)
+            .gte('date', from).lte('date', to).eq('status', 'approved')
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け'])
+    ])
+
     const byDate = {}
     for (const r of data || []) {
         if (!byDate[r.date]) byDate[r.date] = []
         byDate[r.date].push(r)
     }
+    const leaveByDate = {}, nakamByDate = {}
+    for (const r of reqData || []) {
+        if (r.requested_type === '中抜け') nakamByDate[r.date] = r
+        else leaveByDate[r.date] = r
+    }
+
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
     let rows = '', totalMins = 0, totalOt = 0
-    for (let d = 1; d <= lastDay; d++) {
-        const ds = `${month}-${String(d).padStart(2,'0')}`
-        const dayName = ['日','月','火','水','木','金','土'][new Date(ds).getDay()]
+
+    // 日付リスト：選択月11日〜月末、翌月1日〜10日
+    const dates = []
+    const lastDayOfMonth = new Date(parseInt(year), parseInt(mon), 0).getDate()
+    for (let d = 11; d <= lastDayOfMonth; d++)
+        dates.push(`${month}-${String(d).padStart(2,'0')}`)
+    for (let d = 1; d <= 10; d++)
+        dates.push(`${nextYear}-${nextMon}-${String(d).padStart(2,'0')}`)
+
+    for (const ds of dates) {
+        const dateObj = new Date(ds)
+        const dayName = ['日','月','火','水','木','金','土'][dateObj.getDay()]
+        const dispMon = dateObj.getMonth() + 1
+        const dispDay = dateObj.getDate()
         const recs = (byDate[ds] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
         const ci = recs.find(r => r.type === 'clock_in')
         const bs = recs.find(r => r.type === 'break_start')
         const be = recs.find(r => r.type === 'break_end')
         const co = [...recs].reverse().find(r => r.type === 'clock_out')
-        const mins = calcMins(recs)
+        const { label: leaveLabel, mins: leaveMins }  = calcLeave(leaveByDate[ds])
+        const { label: nakLabel,  mins: nakMins }     = calcNakamuke(nakamByDate[ds])
+        const workedMins = calcMins(recs)
+        const dayTotal = workedMins + leaveMins - nakMins
         const ot = calcOvertime(recs)
-        totalMins += mins
+        totalMins += dayTotal
         totalOt += ot
-        if (!ci && !co) continue
-        const weekend = new Date(ds).getDay() === 0 || new Date(ds).getDay() === 6
+        if (!ci && !co && !leaveLabel && !nakLabel) continue
+        const weekend = dateObj.getDay() === 0 || dateObj.getDay() === 6
+        const leaveBadge = leaveLabel
+            ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>`
+            : ''
+        const nakBadge = nakLabel
+            ? `<span style="background:#fed7aa;color:#9a3412;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600">${nakLabel}</span>`
+            : ''
         rows += `<tr ${weekend ? 'style="color:#9ca3af"' : ''}>`
-        rows += `<td>${parseInt(mon)}/${d}（${dayName}）</td>`
+        rows += `<td>${dispMon}/${dispDay}（${dayName}）</td>`
         rows += `<td>${ci ? fmt(ci.timestamp) : '-'}</td>`
         rows += `<td>${bs ? fmt(bs.timestamp) : '-'}</td>`
         rows += `<td>${be ? fmt(be.timestamp) : '-'}</td>`
         rows += `<td>${co ? fmt(co.timestamp) : '-'}</td>`
-        rows += `<td>${mins > 0 ? toHHMM(mins) : '-'}</td>`
-        rows += `<td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td></tr>`
+        rows += `<td>${dayTotal > 0 ? toHHMM(dayTotal) : '-'}</td>`
+        rows += `<td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td>`
+        rows += `<td>${leaveBadge}</td>`
+        rows += `<td>${nakBadge}</td></tr>`
     }
-    if (!rows) rows = '<tr><td colspan="7" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
-    rows += `<tr class="total-row"><td>月間合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td></tr>`
+
+    if (!rows) rows = '<tr><td colspan="9" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    rows += `<tr class="total-row"><td>合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td><td></td><td></td></tr>`
     document.getElementById('monthly-tbl').innerHTML =
-        `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th></tr></thead><tbody>${rows}</tbody></table>`
+        `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th><th style="color:#9d174d">有給</th><th style="color:#9a3412">中抜け</th></tr></thead><tbody>${rows}</tbody></table>`
 }
 
 function renderQR() {
-    const base = location.origin + location.pathname.replace('admin.html', 'index.html')
+    const base = 'https://Koshi1987.github.io/kinmu-app/index.html'
     let html = ''
     for (const emp of employees) {
-        const url    = `${base}?id=${emp.id}`
-        const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(url)}`
-        const tname  = teams.find(t => t.id === emp.team_id)?.name || ''
+        const tname = teams.find(t => t.id === emp.team_id)?.name || ''
         html += `<div class="qr-card">
             <div class="name">${emp.name}</div>
             <div class="team-lbl">${tname}</div>
-            <img src="${qrUrl}" alt="QR ${emp.name}" loading="lazy">
+            <div id="qr-${emp.id}" style="display:flex;justify-content:center"></div>
         </div>`
     }
     document.getElementById('qr-grid').innerHTML = html || '<div class="loading">職員が登録されていません</div>'
+    for (const emp of employees) {
+        const url = `${base}?id=${emp.id}`
+        new QRCode(document.getElementById(`qr-${emp.id}`), { text: url, width: 150, height: 150 })
+    }
 }
 
 // ---- ヘルパー ----
+function calcLeave(req) {
+    if (!req) return { label: '', mins: 0 }
+    const t = req.requested_type, h = req.requested_hours || 0
+    if (t === '有給')    return { label: '有給（全日）', mins: 480 }
+    if (t === 'AM有休')  return { label: 'AM有休',      mins: 240 }
+    if (t === 'PM有休')  return { label: 'PM有休',      mins: 240 }
+    if (t === '時間有給') return { label: `時間有給 ${h}h`, mins: h * 60 }
+    if (t === '研修')    return { label: '研修',         mins: 480 }
+    return { label: t, mins: 0 }
+}
+
+function calcNakamuke(req) {
+    if (!req || req.requested_type !== '中抜け') return { label: '', mins: 0 }
+    try {
+        const d = JSON.parse(req.reason || '{}')
+        const bs = d.break_start, be = d.break_end
+        if (!bs || !be) return { label: '中抜け', mins: 0 }
+        const toM = s => { const [h, m] = s.split(':').map(Number); return h * 60 + m }
+        const mins = Math.max(0, toM(be) - toM(bs))
+        const h = Math.floor(mins / 60), m = mins % 60
+        const dur = h > 0 ? `${h}時間${m > 0 ? m + '分' : ''}` : `${m}分`
+        return { label: `中抜け ${bs}〜${be}（${dur}）`, mins }
+    } catch(e) { return { label: '中抜け', mins: 0 } }
+}
+
 function calcMins(records) {
     let ci = null, bs = null, brk = 0, result = 0
     const sorted = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     for (const r of sorted) {
         const t = new Date(r.timestamp)
-        if (r.type === 'clock_in')                    ci = t
+        if (r.type === 'clock_in') {
+            // 9:00より早い打刻は9:00からカウント
+            const nineAM = new Date(t)
+            nineAM.setHours(9, 0, 0, 0)
+            ci = t < nineAM ? nineAM : t
+        }
         else if (r.type === 'break_start')             bs = t
         else if (r.type === 'break_end' && bs)       { brk += (t-bs)/60000; bs = null }
         else if (r.type === 'clock_out' && ci)         result = (t-ci)/60000 - brk
     }
     if (ci && result === 0) result = (new Date()-ci)/60000 - brk
+    // 7時間以上の勤務（退勤打刻あり）は最低60分の休憩を保証
+    const hasCO = records.some(r => r.type === 'clock_out')
+    if (hasCO && ci) {
+        const elapsed = result + brk  // 9:00カット後の在籍時間
+        if (elapsed >= 420 && brk < 60) result = elapsed - 60
+    }
     return Math.max(0, Math.round(result))
 }
 
