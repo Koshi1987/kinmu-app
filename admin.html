@@ -837,13 +837,8 @@ async function loadShiftsMonthly() {
                     // ds > today（未来日）→ 何も加算しない（0スタート）
                 }
 
-                const opts = SHIFT_TYPES.map(s => `<option value="${s}"${s===st?' selected':''}>${s}</option>`).join('')
-                cells += `<td style="background:${bg};text-align:center;padding:1px;border:1px solid #f0f0f0">
-                    <select onchange="setShift('${emp.id}','${ds}',this.value,this.closest('td'))"
-                        style="width:100%;font-size:11px;cursor:pointer;border:1px solid #d1d5db;border-radius:4px;background:${bg};color:#374151;font-weight:600;padding:1px 2px">
-                        ${opts}
-                    </select>
-                </td>`
+                cells += `<td onclick="showShiftPicker('${emp.id}','${ds}','${st}',this)"
+                    style="background:${bg};text-align:center;font-size:11px;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;user-select:none;white-space:nowrap">${st}<span style="font-size:8px;opacity:0.5">▾</span></td>`
             }
 
             const isTarget = TARGET_NAMES_CHECK.some(n => emp.name.includes(n))
@@ -929,6 +924,65 @@ function calcActualDayHours(recs, nakamukeMins = 0, shiftType = '') {
     const otMin  = end > base18 ? (end - base18) / 60000 : 0
     const regMin = Math.max(0, totalMin - otMin)
     return { regular: regMin / 60, overtime: otMin / 60 }
+}
+
+function showShiftPicker(empId, date, current, tdEl) {
+    // 既存のピッカーがあれば閉じる（同じセルを再クリックで閉じる）
+    const existing = document.getElementById('shift-picker')
+    if (existing) { existing.remove(); return }
+
+    const picker = document.createElement('div')
+    picker.id = 'shift-picker'
+    const rect = tdEl.getBoundingClientRect()
+    picker.style.cssText = `
+        position:fixed;
+        top:${rect.bottom + 4}px;
+        left:${Math.min(rect.left, window.innerWidth - 230)}px;
+        background:white;
+        border:1px solid #e5e7eb;
+        border-radius:10px;
+        box-shadow:0 4px 18px rgba(0,0,0,.18);
+        padding:8px;
+        z-index:9999;
+        display:flex;
+        flex-wrap:wrap;
+        gap:5px;
+        max-width:230px;
+    `
+    for (const s of SHIFT_TYPES) {
+        const btn = document.createElement('button')
+        btn.textContent = s
+        btn.style.cssText = `
+            padding:5px 9px;
+            border-radius:6px;
+            font-size:12px;
+            cursor:pointer;
+            font-weight:600;
+            background:${SHIFT_COLORS[s] || '#f3f4f6'};
+            color:#374151;
+            border:2px solid ${s === current ? '#1d4ed8' : 'transparent'};
+        `
+        btn.onmouseenter = () => { btn.style.opacity = '0.8' }
+        btn.onmouseleave = () => { btn.style.opacity = '1' }
+        btn.onclick = (e) => {
+            e.stopPropagation()
+            picker.remove()
+            setShift(empId, date, s, tdEl)
+        }
+        picker.appendChild(btn)
+    }
+    document.body.appendChild(picker)
+
+    // 外側クリックで閉じる
+    setTimeout(() => {
+        const close = (e) => {
+            if (!picker.contains(e.target)) {
+                picker.remove()
+                document.removeEventListener('click', close)
+            }
+        }
+        document.addEventListener('click', close)
+    }, 50)
 }
 
 async function setShift(empId, date, value, tdEl) {
