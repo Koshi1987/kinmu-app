@@ -838,9 +838,9 @@ async function loadShiftsMonthly() {
                 }
 
                 const opts = SHIFT_TYPES.map(s => `<option value="${s}"${s===st?' selected':''}>${s}</option>`).join('')
-                cells += `<td style="background:${bg};text-align:center;padding:1px 0;border:1px solid #f0f0f0">
+                cells += `<td style="background:${bg};text-align:center;padding:1px;border:1px solid #f0f0f0">
                     <select onchange="setShift('${emp.id}','${ds}',this.value,this.closest('td'))"
-                        style="width:100%;border:none;background:transparent;font-size:11px;text-align:center;cursor:pointer;padding:1px 0;outline:none;color:#374151;font-weight:600;-webkit-appearance:none;appearance:none">
+                        style="width:100%;font-size:11px;cursor:pointer;border:1px solid #d1d5db;border-radius:4px;background:${bg};color:#374151;font-weight:600;padding:1px 2px">
                         ${opts}
                     </select>
                 </td>`
