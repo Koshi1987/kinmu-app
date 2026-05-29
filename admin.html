@@ -571,10 +571,11 @@ async function loadRecords() {
     const date = document.getElementById('rec-date').value
     if (!date) return alert('日付を選択してください')
 
-    const [{ data }, { data: reqData }] = await Promise.all([
+    const [{ data }, { data: reqData }, { data: shiftData }] = await Promise.all([
         db.from('attendance').select('*').eq('date', date).order('timestamp'),
         db.from('shift_requests').select('*').eq('date', date).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け'])
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け']),
+        db.from('shifts').select('employee_id, shift_type').eq('date', date)
     ])
 
     const empAtt = {}
@@ -586,6 +587,10 @@ async function loadRecords() {
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakamMap[r.employee_id] = r
         else leaveMap[r.employee_id] = r
+    }
+    const shiftTypeMap = {}
+    for (const s of shiftData || []) {
+        if (s.shift_type) shiftTypeMap[s.employee_id] = s.shift_type
     }
 
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
@@ -603,8 +608,9 @@ async function loadRecords() {
             const co = [...recs].reverse().find(r => r.type === 'clock_out')
             const { label: leaveLabel, mins: leaveMins }   = calcLeave(leaveMap[emp.id])
             const { label: nakLabel,  mins: nakMins }      = calcNakamuke(nakamMap[emp.id])
-            const totalMins = calcMins(recs) + leaveMins - nakMins
-            const ot = calcOvertime(recs)
+            const shiftType = shiftTypeMap[emp.id] || emp.default_shift || '日勤'
+            const totalMins = calcMins(recs, shiftType) + leaveMins - nakMins
+            const ot = calcOvertime(recs, shiftType)
             if (!ci && !co && !leaveLabel && !nakLabel) continue
             const leaveBadge = leaveLabel
                 ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>`
@@ -814,7 +820,7 @@ async function loadShiftsMonthly() {
                     const hasCO = recs.some(r => r.type === 'clock_out')
                     if (hasCO && ds <= today) {
                         // 実績あり → タイムカードから計算（中抜け差し引き）
-                        const { regular, overtime } = calcActualDayHours(recs, nakMap[key] || 0)
+                        const { regular, overtime } = calcActualDayHours(recs, nakMap[key] || 0, st)
                         const leaveH = leaveHrsMap[key] || 0  // AM有休・PM有休・時間有給の分を加算
                         totalHours         += regular + overtime + leaveH
                         totalHoursExcLeave += regular + overtime  // 有休分は含めない
@@ -831,8 +837,13 @@ async function loadShiftsMonthly() {
                     // ds > today（未来日）→ 何も加算しない（0スタート）
                 }
 
-                cells += `<td onclick="cycleShift('${emp.id}','${ds}','${st}')"
-                    style="background:${bg};text-align:center;font-size:12px;cursor:pointer;padding:3px 2px;border:1px solid #f0f0f0">${st}</td>`
+                const opts = SHIFT_TYPES.map(s => `<option value="${s}"${s===st?' selected':''}>${s}</option>`).join('')
+                cells += `<td style="background:${bg};text-align:center;padding:1px 0;border:1px solid #f0f0f0">
+                    <select onchange="setShift('${emp.id}','${ds}',this.value,this.closest('td'))"
+                        style="width:100%;border:none;background:transparent;font-size:11px;text-align:center;cursor:pointer;padding:1px 0;outline:none;color:#374151;font-weight:600;-webkit-appearance:none;appearance:none">
+                        ${opts}
+                    </select>
+                </td>`
             }
 
             const isTarget = TARGET_NAMES_CHECK.some(n => emp.name.includes(n))
@@ -890,27 +901,29 @@ async function loadShiftsMonthly() {
 }
 
 // 1日の実績時間を計算（正規時間・残業時間を返す）
-function calcActualDayHours(recs, nakamukeMins = 0) {
+function calcActualDayHours(recs, nakamukeMins = 0, shiftType = '') {
+    const isHarunatsu = shiftType === '春夏'
     const sorted = [...recs].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     const ci = sorted.find(r => r.type === 'clock_in')
     const co = [...sorted].reverse().find(r => r.type === 'clock_out')
     if (!ci || !co) return { regular: 0, overtime: 0 }
-    // 9:00より早い打刻は9:00からカウント
+    // 春夏は8:30、それ以外は9:00より早い打刻をカット
     const rawStart = new Date(ci.timestamp)
-    const nineAM   = new Date(rawStart); nineAM.setHours(9, 0, 0, 0)
-    const start    = rawStart < nineAM ? nineAM : rawStart
-    const end      = new Date(co.timestamp)
+    const cap = new Date(rawStart)
+    cap.setHours(isHarunatsu ? 8 : 9, isHarunatsu ? 30 : 0, 0, 0)
+    const start = rawStart < cap ? cap : rawStart
+    const end   = new Date(co.timestamp)
     // 休憩時間
     let breakMs = 0
     const bs = sorted.find(r => r.type === 'break_start')
     const be = sorted.find(r => r.type === 'break_end')
     if (bs && be) breakMs = new Date(be.timestamp) - new Date(bs.timestamp)
-    // 7時間以上の勤務は最低60分の休憩を保証（取れなくても差し引く）
     const elapsedMin   = (end - start) / 60000 - nakamukeMins
     const actualBrkMin = breakMs / 60000
-    const minBreak     = elapsedMin >= 420 ? 60 : 0
-    const effBrkMin    = Math.max(minBreak, actualBrkMin)
-    const totalMin     = elapsedMin - effBrkMin
+    // 春夏は休憩差し引きなし。それ以外は7時間以上で最低60分保証
+    const minBreak  = (!isHarunatsu && elapsedMin >= 420) ? 60 : 0
+    const effBrkMin = isHarunatsu ? 0 : Math.max(minBreak, actualBrkMin)
+    const totalMin  = elapsedMin - effBrkMin
     // 18:00以降が残業
     const base18 = new Date(end); base18.setHours(18, 0, 0, 0)
     const otMin  = end > base18 ? (end - base18) / 60000 : 0
@@ -918,13 +931,14 @@ function calcActualDayHours(recs, nakamukeMins = 0) {
     return { regular: regMin / 60, overtime: otMin / 60 }
 }
 
-async function cycleShift(empId, date, current) {
-    const next = SHIFT_TYPES[(SHIFT_TYPES.indexOf(current) + 1) % SHIFT_TYPES.length]
+async function setShift(empId, date, value, tdEl) {
+    // 即時背景色フィードバック
+    if (tdEl) tdEl.style.background = SHIFT_COLORS[value] || '#fff'
     const { data } = await db.from('shifts').select('id').eq('employee_id', empId).eq('date', date)
     if (data && data.length > 0) {
-        await db.from('shifts').update({ shift_type: next }).eq('id', data[0].id)
+        await db.from('shifts').update({ shift_type: value }).eq('id', data[0].id)
     } else {
-        await db.from('shifts').insert({ employee_id: empId, date, shift_type: next })
+        await db.from('shifts').insert({ employee_id: empId, date, shift_type: value })
     }
     loadShiftsMonthly()
 }
@@ -1485,12 +1499,14 @@ async function loadMonthly() {
     document.getElementById('pn-monthly-emp').textContent =
         `${emp.name}　${year}年${mon}月11日〜${nextYear}年${nextMon}月10日　印刷日時: ${new Date().toLocaleString('ja-JP')}`
 
-    const [{ data }, { data: reqData }] = await Promise.all([
+    const [{ data }, { data: reqData }, { data: shiftData }] = await Promise.all([
         db.from('attendance').select('*').eq('employee_id', empId)
             .gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', empId)
             .gte('date', from).lte('date', to).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け'])
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け']),
+        db.from('shifts').select('date, shift_type').eq('employee_id', empId)
+            .gte('date', from).lte('date', to)
     ])
 
     const byDate = {}
@@ -1502,6 +1518,10 @@ async function loadMonthly() {
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakamByDate[r.date] = r
         else leaveByDate[r.date] = r
+    }
+    const shiftByDate = {}
+    for (const s of shiftData || []) {
+        if (s.shift_type) shiftByDate[s.date] = s.shift_type
     }
 
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
@@ -1527,9 +1547,10 @@ async function loadMonthly() {
         const co = [...recs].reverse().find(r => r.type === 'clock_out')
         const { label: leaveLabel, mins: leaveMins }  = calcLeave(leaveByDate[ds])
         const { label: nakLabel,  mins: nakMins }     = calcNakamuke(nakamByDate[ds])
-        const workedMins = calcMins(recs)
+        const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
+        const workedMins = calcMins(recs, shiftType)
         const dayTotal = workedMins + leaveMins - nakMins
-        const ot = calcOvertime(recs)
+        const ot = calcOvertime(recs, shiftType)
         totalMins += dayTotal
         totalOt += ot
         if (!ci && !co && !leaveLabel && !nakLabel) continue
@@ -1602,27 +1623,29 @@ function calcNakamuke(req) {
     } catch(e) { return { label: '中抜け', mins: 0 } }
 }
 
-function calcMins(records) {
+function calcMins(records, shiftType = '') {
+    const isHarunatsu = shiftType === '春夏'
     let ci = null, bs = null, brk = 0, result = 0
     const sorted = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     for (const r of sorted) {
         const t = new Date(r.timestamp)
         if (r.type === 'clock_in') {
-            // 9:00より早い打刻は9:00からカウント
-            const nineAM = new Date(t)
-            nineAM.setHours(9, 0, 0, 0)
-            ci = t < nineAM ? nineAM : t
+            const cap = new Date(t)
+            cap.setHours(isHarunatsu ? 8 : 9, isHarunatsu ? 30 : 0, 0, 0)
+            ci = t < cap ? cap : t
         }
         else if (r.type === 'break_start')             bs = t
         else if (r.type === 'break_end' && bs)       { brk += (t-bs)/60000; bs = null }
         else if (r.type === 'clock_out' && ci)         result = (t-ci)/60000 - brk
     }
     if (ci && result === 0) result = (new Date()-ci)/60000 - brk
-    // 7時間以上の勤務（退勤打刻あり）は最低60分の休憩を保証
-    const hasCO = records.some(r => r.type === 'clock_out')
-    if (hasCO && ci) {
-        const elapsed = result + brk  // 9:00カット後の在籍時間
-        if (elapsed >= 420 && brk < 60) result = elapsed - 60
+    // 7時間以上の勤務（退勤打刻あり）は最低60分の休憩を保証（春夏を除く）
+    if (!isHarunatsu) {
+        const hasCO = records.some(r => r.type === 'clock_out')
+        if (hasCO && ci) {
+            const elapsed = result + brk
+            if (elapsed >= 420 && brk < 60) result = elapsed - 60
+        }
     }
     return Math.max(0, Math.round(result))
 }
@@ -1631,13 +1654,17 @@ function toHHMM(mins) {
     return `${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}`
 }
 
-// 18:00以降の残業時間（分）を計算
-function calcOvertime(records) {
+// 残業時間（分）を計算（春夏は16:30、それ以外は18:00以降）
+function calcOvertime(records, shiftType = '') {
     const co = [...records].reverse().find(r => r.type === 'clock_out')
     if (!co) return 0
     const coTime = new Date(co.timestamp)
     const base = new Date(coTime)
-    base.setHours(18, 0, 0, 0)
+    if (shiftType === '春夏') {
+        base.setHours(16, 30, 0, 0)
+    } else {
+        base.setHours(18, 0, 0, 0)
+    }
     return coTime > base ? Math.round((coTime - base) / 60000) : 0
 }
 
