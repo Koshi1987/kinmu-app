@@ -1657,15 +1657,13 @@ async function loadMonthly() {
     const emp = employees.find(e => e.id === empId)
     const [year, mon] = month.split('-')
 
-    // 期間：選択月の11日〜翌月10日
-    const from = `${month}-11`
-    const nextMonthDate = new Date(parseInt(year), parseInt(mon), 1) // 翌月1日
-    const nextYear = nextMonthDate.getFullYear()
-    const nextMon  = String(nextMonthDate.getMonth() + 1).padStart(2, '0')
-    const to = `${nextYear}-${nextMon}-10`
+    // 期間：選択月の1日〜末日（カレンダー月）
+    const lastDayOfMonth = new Date(parseInt(year), parseInt(mon), 0).getDate()
+    const from = `${month}-01`
+    const to   = `${month}-${String(lastDayOfMonth).padStart(2,'0')}`
 
     document.getElementById('pn-monthly-emp').textContent =
-        `${emp.name}　${year}年${mon}月11日〜${nextYear}年${nextMon}月10日　印刷日時: ${new Date().toLocaleString('ja-JP')}`
+        `${emp.name}　${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
 
     const [{ data }, { data: reqData }, { data: shiftData }] = await Promise.all([
         db.from('attendance').select('*').eq('employee_id', empId)
@@ -1695,13 +1693,10 @@ async function loadMonthly() {
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
     let rows = '', totalMins = 0, totalOt = 0
 
-    // 日付リスト：選択月11日〜月末、翌月1日〜10日
+    // 日付リスト：選択月1日〜末日
     const dates = []
-    const lastDayOfMonth = new Date(parseInt(year), parseInt(mon), 0).getDate()
-    for (let d = 11; d <= lastDayOfMonth; d++)
+    for (let d = 1; d <= lastDayOfMonth; d++)
         dates.push(`${month}-${String(d).padStart(2,'0')}`)
-    for (let d = 1; d <= 10; d++)
-        dates.push(`${nextYear}-${nextMon}-${String(d).padStart(2,'0')}`)
 
     for (const ds of dates) {
         const dateObj = new Date(ds)
