@@ -276,6 +276,7 @@
                 <button class="btn btn-ghost" onclick="loadRequests()">🔄 更新</button>
                 <button class="btn btn-ghost" onclick="toggleAdminFix()">✏️ 手動打刻補正</button>
                 <button class="btn btn-ghost" onclick="toggleAdminNak()">🚶 手動中抜け入力</button>
+                <button class="btn btn-ghost" onclick="toggleAdminYkyuu()">🕐 時間有給入力</button>
             </div>
 
             <!-- 管理者手動中抜けフォーム -->
@@ -296,6 +297,30 @@
                 <button class="btn btn-primary" onclick="adminNakamuke()">中抜けを保存</button>
                 <button class="btn btn-danger" onclick="deleteShiftRequest()" style="margin-left:8px">🗑️ この日の有給・研修・中抜け申請を削除</button>
                 <span id="anak-msg" style="font-size:13px;margin-left:12px"></span>
+            </div>
+
+            <!-- 管理者時間有給フォーム -->
+            <div id="admin-ykyuu-form" style="display:none;background:white;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-left:4px solid #7c3aed">
+                <div style="font-size:15px;font-weight:700;margin-bottom:14px">🕐 時間有給の追加・変更・削除</div>
+                <div class="form-row" style="margin-bottom:10px">
+                    <select id="aykyuu-emp" style="min-width:120px" onchange="loadHourlyLeaveList()"></select>
+                    <input type="date" id="aykyuu-date">
+                    <select id="aykyuu-hours" style="min-width:90px">
+                        <option value="1">1時間</option>
+                        <option value="2">2時間</option>
+                        <option value="3">3時間</option>
+                        <option value="4">4時間</option>
+                        <option value="5">5時間</option>
+                        <option value="6">6時間</option>
+                        <option value="7">7時間</option>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+                    <button class="btn btn-primary" onclick="adminHourlyLeave()">💾 保存</button>
+                    <button class="btn btn-danger"  onclick="deleteHourlyLeave()">🗑️ この日の時間有給を削除</button>
+                    <span id="aykyuu-msg" style="font-size:13px;margin-left:4px"></span>
+                </div>
+                <div id="aykyuu-list"></div>
             </div>
 
             <!-- 管理者手動打刻補正フォーム -->
@@ -1472,6 +1497,100 @@ async function deleteShiftRequest() {
     } catch(e) { alert('エラー: ' + e.message) }
 }
 
+// ---- 時間有給管理 ----
+function toggleAdminYkyuu() {
+    const f = document.getElementById('admin-ykyuu-form')
+    const show = f.style.display === 'none'
+    f.style.display = show ? 'block' : 'none'
+    if (show) {
+        document.getElementById('aykyuu-emp').innerHTML =
+            employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+        document.getElementById('aykyuu-date').value = new Date().toLocaleDateString('sv-SE')
+        loadHourlyLeaveList()
+    }
+}
+
+async function adminHourlyLeave() {
+    const empId = document.getElementById('aykyuu-emp').value
+    const date  = document.getElementById('aykyuu-date').value
+    const hours = parseInt(document.getElementById('aykyuu-hours').value)
+    const msg   = document.getElementById('aykyuu-msg')
+    if (!empId || !date) { msg.textContent = '職員と日付を選択してください'; return }
+    const emp = employees.find(e => e.id === empId)
+    try {
+        const { data: ex } = await db.from('shift_requests')
+            .select('id').eq('employee_id', empId).eq('date', date).eq('requested_type', '時間有給')
+        const payload = { employee_id: empId, date, requested_type: '時間有給', requested_hours: hours, reason: '', status: 'approved' }
+        if (ex && ex.length > 0) {
+            await db.from('shift_requests').update({ requested_hours: hours, status: 'approved' }).eq('id', ex[0].id)
+        } else {
+            await db.from('shift_requests').insert(payload)
+        }
+        msg.style.color = '#15803d'
+        msg.textContent = `✅ ${emp?.name} ${date} 時間有給 ${hours}時間 を保存しました`
+        setTimeout(() => msg.textContent = '', 4000)
+        loadHourlyLeaveList()
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+async function deleteHourlyLeave() {
+    const empId = document.getElementById('aykyuu-emp').value
+    const date  = document.getElementById('aykyuu-date').value
+    const msg   = document.getElementById('aykyuu-msg')
+    if (!empId || !date) { msg.textContent = '職員と日付を選択してください'; return }
+    const emp = employees.find(e => e.id === empId)
+    if (!confirm(`${emp?.name} ${date} の時間有給を削除しますか？`)) return
+    try {
+        await db.from('shift_requests').delete()
+            .eq('employee_id', empId).eq('date', date).eq('requested_type', '時間有給')
+        msg.style.color = '#b91c1c'
+        msg.textContent = '🗑️ 削除しました'
+        setTimeout(() => msg.textContent = '', 3000)
+        loadHourlyLeaveList()
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+async function deleteHourlyLeaveById(id) {
+    if (!confirm('この時間有給を削除しますか？')) return
+    await db.from('shift_requests').delete().eq('id', id)
+    loadHourlyLeaveList()
+}
+
+async function loadHourlyLeaveList() {
+    const empId  = document.getElementById('aykyuu-emp').value
+    const listEl = document.getElementById('aykyuu-list')
+    if (!empId || !listEl) return
+    const emp = employees.find(e => e.id === empId)
+    const { data } = await db.from('shift_requests')
+        .select('*').eq('employee_id', empId).eq('requested_type', '時間有給')
+        .eq('status', 'approved').order('date', { ascending: false }).limit(30)
+    if (!data || data.length === 0) {
+        listEl.innerHTML = `<div style="color:#9ca3af;font-size:13px;padding:6px 0">${emp?.name}さんの時間有給の記録はありません</div>`
+        return
+    }
+    const rows = data.map(r => {
+        const dow = ['日','月','火','水','木','金','土'][new Date(r.date).getDay()]
+        return `<tr>
+            <td style="padding:6px 12px;font-size:13px">${r.date}（${dow}）</td>
+            <td style="padding:6px 12px;font-size:13px;font-weight:700;color:#7c3aed">${r.requested_hours}時間</td>
+            <td style="padding:6px 6px">
+                <button class="btn btn-danger btn-sm" onclick="deleteHourlyLeaveById('${r.id}')">🗑️ 削除</button>
+            </td>
+        </tr>`
+    }).join('')
+    listEl.innerHTML = `
+        <div style="font-size:13px;font-weight:600;color:#6b7280;margin-bottom:8px">${emp?.name}さんの時間有給一覧（直近30件）</div>
+        <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden;border:1px solid #e5e7eb">
+            <thead><tr style="background:#f5f3ff">
+                <th style="padding:7px 12px;font-size:12px;text-align:left;color:#7c3aed;font-weight:600">日付</th>
+                <th style="padding:7px 12px;font-size:12px;text-align:left;color:#7c3aed;font-weight:600">時間</th>
+                <th style="padding:7px 6px"></th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+        </table></div>`
+}
+
 async function deleteAttendance() {
     const empId = document.getElementById('afix-emp').value
     const date  = document.getElementById('afix-date').value
@@ -1527,12 +1646,7 @@ function initMonthly() {
     const sel = document.getElementById('monthly-emp')
     sel.innerHTML = employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
     const now = new Date()
-    // 今日が11日以降なら今月、10日以前なら先月を選択（11日〜翌月10日の期間に合わせる）
-    let y = now.getFullYear(), m = now.getMonth() + 1
-    if (now.getDate() <= 10) {
-        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-        y = prev.getFullYear(); m = prev.getMonth() + 1
-    }
+    const y = now.getFullYear(), m = now.getMonth() + 1
     document.getElementById('monthly-month').value = `${y}-${String(m).padStart(2,'0')}`
 }
 
