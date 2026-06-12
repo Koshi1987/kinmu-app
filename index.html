@@ -120,8 +120,9 @@
 
         /* ---- 打刻ボタン ---- */
         .act-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .act-cell { display: flex; flex-direction: column; align-items: center; gap: 7px; }
         .act-btn {
-            padding: 30px 8px; border: none; border-radius: 26px;
+            width: 100%; padding: 30px 8px; border: none; border-radius: 26px;
             font-size: 17px; font-weight: 700; cursor: pointer;
             line-height: 1.6; transition: all .18s;
             font-family: 'Zen Maru Gothic', sans-serif;
@@ -129,6 +130,7 @@
         }
         .act-btn:active { transform: scale(.93); box-shadow: none; }
         .act-btn:disabled { opacity: .22; cursor: not-allowed; transform: none; box-shadow: none; }
+        .act-time { font-size: 16px; font-weight: 700; color: #374151; min-height: 24px; letter-spacing: 1px; }
         .a-ci { background: linear-gradient(135deg, #c8f2d8, #a8e4bc); color: #1a5c35; border: 2px solid #9cdcb0; }
         .a-bs { background: linear-gradient(135deg, #fff0b8, #ffe08a); color: #7a5200; border: 2px solid #ffd466; }
         .a-be { background: linear-gradient(135deg, #d4e8fc, #b8d4f8); color: #1a3a70; border: 2px solid #a0c4f0; }
@@ -241,10 +243,22 @@
             <div class="sel-status" id="sel-st"></div>
         </div>
         <div class="act-grid">
-            <button class="act-btn a-ci" id="b-ci" onclick="rec('clock_in')">🟢<br>出勤</button>
-            <button class="act-btn a-bs" id="b-bs" onclick="rec('break_start')">☕<br>休憩イン</button>
-            <button class="act-btn a-be" id="b-be" onclick="rec('break_end')">🔵<br>休憩アウト</button>
-            <button class="act-btn a-co" id="b-co" onclick="rec('clock_out')">🔴<br>退勤</button>
+            <div class="act-cell">
+                <button class="act-btn a-ci" id="b-ci" onclick="rec('clock_in')">🟢<br>出勤</button>
+                <div class="act-time" id="t-ci"></div>
+            </div>
+            <div class="act-cell">
+                <button class="act-btn a-bs" id="b-bs" onclick="rec('break_start')">☕<br>休憩イン</button>
+                <div class="act-time" id="t-bs"></div>
+            </div>
+            <div class="act-cell">
+                <button class="act-btn a-be" id="b-be" onclick="rec('break_end')">🔵<br>休憩アウト</button>
+                <div class="act-time" id="t-be"></div>
+            </div>
+            <div class="act-cell">
+                <button class="act-btn a-co" id="b-co" onclick="rec('clock_out')">🔴<br>退勤</button>
+                <div class="act-time" id="t-co"></div>
+            </div>
         </div>
         <button class="req-btn" onclick="goReq()">📝 シフト変更申請</button>
         <button class="req-btn" style="margin-top:10px;color:#e07050;border-color:#fed7aa" onclick="goFix()">⏰ 打刻補正申請（押し忘れ）</button>
@@ -400,6 +414,7 @@ function todayStr() { return new Date().toLocaleDateString('sv-SE') }
 async function init() {
     document.getElementById('hd-date').textContent =
         new Date().toLocaleDateString('ja-JP', { year:'numeric', month:'long', day:'numeric', weekday:'short' })
+    scheduleMidnightReset()
     try {
         const [tr, er, ar] = await Promise.all([
             db.from('teams').select('*').order('id'),
@@ -443,7 +458,7 @@ function renderList() {
     if (pid) selEmpFn(pid)
 }
 
-function selEmpFn(id) {
+async function selEmpFn(id) {
     selEmp = emps.find(e => e.id === id)
     if (!selEmp) return
     const s = todaySt[id]
@@ -453,6 +468,19 @@ function selEmpFn(id) {
     document.getElementById('b-bs').disabled = s !== 'clock_in' && s !== 'break_end'
     document.getElementById('b-be').disabled = s !== 'break_start'
     document.getElementById('b-co').disabled = !s || s === 'clock_out'
+
+    // 今日の打刻時刻を取得して各ボタン下に表示
+    const TID = { clock_in: 't-ci', break_start: 't-bs', break_end: 't-be', clock_out: 't-co' }
+    Object.values(TID).forEach(tid => { document.getElementById(tid).textContent = '' })
+    const { data: recs } = await db.from('attendance')
+        .select('type, timestamp').eq('employee_id', id).eq('date', todayStr())
+        .order('timestamp', { ascending: true })
+    for (const r of recs || []) {
+        const tid = TID[r.type]
+        if (tid) document.getElementById(tid).textContent =
+            new Date(r.timestamp).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+    }
+
     show('v-act')
 }
 
@@ -461,15 +489,33 @@ async function rec(type) {
         await db.from('attendance').insert({ employee_id: selEmp.id, type, date: todayStr() })
         todaySt[selEmp.id] = type
         const now = new Date()
+        const timeStr = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+        // ボタン下の時刻を即時更新
+        const TID = { clock_in: 't-ci', break_start: 't-bs', break_end: 't-be', clock_out: 't-co' }
+        const tid = TID[type]
+        if (tid) document.getElementById(tid).textContent = timeStr
         document.getElementById('ok-act').textContent  = AL[type] + 'しました'
         document.getElementById('ok-who').textContent  = selEmp.name
-        document.getElementById('ok-time').textContent = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' })
+        document.getElementById('ok-time').textContent = timeStr
         document.getElementById('ok-msg').textContent  = OK_MSG[type] || '今日もありがとう 💕'
         show('v-ok')
     } catch(e) { alert('エラー: ' + e.message) }
 }
 
 function goList() { renderList(); show('v-list') }
+
+// 深夜0時に打刻時刻表示をリセット
+function scheduleMidnightReset() {
+    const now = new Date()
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0)
+    setTimeout(() => {
+        ['t-ci','t-bs','t-be','t-co'].forEach(id => {
+            const el = document.getElementById(id)
+            if (el) el.textContent = ''
+        })
+        scheduleMidnightReset()
+    }, midnight - now)
+}
 
 function show(id) {
     ['v-list','v-act','v-req','v-fix','v-ok','v-shift'].forEach(v =>

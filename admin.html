@@ -1815,7 +1815,7 @@ function calcMins(records, shiftType = '') {
             if (elapsed >= 420 && brk < 60) result = elapsed - 60
         }
     }
-    return Math.max(0, Math.round(result))
+    return Math.max(0, Math.floor(result))
 }
 
 function toHHMM(mins) {
@@ -1833,7 +1833,7 @@ function calcOvertime(records, shiftType = '') {
     } else {
         base.setHours(18, 0, 0, 0)
     }
-    return coTime > base ? Math.round((coTime - base) / 60000) : 0
+    return coTime > base ? Math.floor((coTime - base) / 60000) : 0
 }
 
 function showMsg(id, text, ok) {
