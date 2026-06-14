@@ -263,6 +263,7 @@
         <button class="req-btn" onclick="goReq()">📝 シフト変更申請</button>
         <button class="req-btn" style="margin-top:10px;color:#e07050;border-color:#fed7aa" onclick="goFix()">⏰ 打刻補正申請（押し忘れ）</button>
         <button class="req-btn" style="margin-top:10px;color:#7c6090;border-color:#ddd1f0" onclick="goShiftView()">📅 今月のシフト表</button>
+        <button class="req-btn" style="margin-top:10px;color:#b05080;border-color:#f9a8d4" onclick="goMyRecord()">📊 自分の勤務記録</button>
     </div>
 
     <!-- 画面3: シフト変更申請 -->
@@ -362,7 +363,7 @@
     <!-- 画面6: シフト表 -->
     <!-- 個人記録画面 -->
     <div id="v-personal" class="hidden">
-        <button class="back-btn" onclick="show('v-shift')">← シフト表に戻る</button>
+        <button class="back-btn" onclick="show('v-act')">← 戻る</button>
         <div style="text-align:center;margin-bottom:12px">
             <div id="personal-name" style="font-size:18px;font-weight:700;color:#c05070;margin-bottom:8px"></div>
             <div style="display:flex;justify-content:center;align-items:center;gap:20px">
@@ -673,7 +674,7 @@ async function loadShiftView() {
         if (!te.length) continue
         rows += `<tr><td colspan="${lastDay+1}" style="background:#fce8ef;font-size:11px;font-weight:700;padding:3px 6px;color:#c05070">${t.name}</td></tr>`
         for (const emp of te) {
-            let cells = `<td onclick="goPersonalRecord('${emp.id}','${emp.name}')" style="position:sticky;left:0;background:white;font-size:11px;font-weight:600;padding:3px 5px;z-index:1;white-space:nowrap;border-right:1px solid #fce8ef;cursor:pointer;color:#c05070;text-decoration:underline dotted #f9a8d4">${emp.name}</td>`
+            let cells = `<td style="position:sticky;left:0;background:white;font-size:11px;font-weight:600;padding:3px 5px;z-index:1;white-space:nowrap;border-right:1px solid #fce8ef">${emp.name}</td>`
             for (const { dow, ds } of days) {
                 const key        = `${emp.id}_${ds}`
                 const isWknd     = dow===0 || dow===6
@@ -700,6 +701,15 @@ async function loadShiftView() {
 
 // ---- 個人記録 ----
 let personalEmpId = null, personalEmpName = '', personalMonthOffset = 0
+
+function goMyRecord() {
+    if (!selEmp) return
+    personalEmpId = selEmp.id
+    personalEmpName = selEmp.name
+    personalMonthOffset = 0
+    loadPersonalRecord()
+    show('v-personal')
+}
 
 function goPersonalRecord(empId, empName) {
     personalEmpId = empId
