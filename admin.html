@@ -1672,7 +1672,7 @@ async function loadMonthly() {
             .gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', empId)
             .gte('date', from).lte('date', to).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け']),
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用']),
         db.from('shifts').select('date, shift_type').eq('employee_id', empId)
             .gte('date', from).lte('date', to)
     ])
@@ -1682,9 +1682,10 @@ async function loadMonthly() {
         if (!byDate[r.date]) byDate[r.date] = []
         byDate[r.date].push(r)
     }
-    const leaveByDate = {}, nakamByDate = {}
+    const leaveByDate = {}, nakamByDate = {}, carRecords = []
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakamByDate[r.date] = r
+        else if (r.requested_type === '自車使用') carRecords.push(r)
         else leaveByDate[r.date] = r
     }
     const shiftByDate = {}
@@ -1745,6 +1746,54 @@ async function loadMonthly() {
     rows += `<tr class="total-row"><td>合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td><td></td><td></td></tr>`
     document.getElementById('monthly-tbl').innerHTML =
         `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th><th style="color:#9d174d">有給</th><th style="color:#9a3412">中抜け</th></tr></thead><tbody>${rows}</tbody></table>`
+        + buildMonthlyCarTable(carRecords)
+}
+
+// 月間個人記録：自車使用記録テーブルを生成
+function buildMonthlyCarTable(carRecords) {
+    if (!carRecords || carRecords.length === 0) return ''
+    const DOW = ['日','月','火','水','木','金','土']
+    const parsed = carRecords.map(r => {
+        let purpose = '', distance = 0, comment = ''
+        try {
+            const d = JSON.parse(r.reason || '{}')
+            purpose  = d.purpose  || ''
+            distance = parseFloat(d.distance) || 0
+            comment  = d.comment  || ''
+        } catch(e) {}
+        return { date: r.date, purpose, distance, comment }
+    }).sort((a,b) => a.date.localeCompare(b.date))
+
+    let totalKm = 0
+    const byPurpose = {}
+    let carRows = ''
+    for (const c of parsed) {
+        totalKm += c.distance
+        byPurpose[c.purpose] = (byPurpose[c.purpose] || 0) + c.distance
+        const dateObj = new Date(c.date)
+        carRows += `<tr>
+            <td>${dateObj.getMonth()+1}/${dateObj.getDate()}（${DOW[dateObj.getDay()]}）</td>
+            <td>${c.purpose}</td>
+            <td style="font-weight:700;color:#2e7d32">${c.distance}km</td>
+            <td style="font-size:13px;color:#6b7280">${c.comment || ''}</td>
+        </tr>`
+    }
+    const purposeSummary = Object.entries(byPurpose)
+        .map(([p, km]) => `${p} ${Math.round(km*10)/10}km`).join('　/　')
+    carRows += `<tr class="total-row">
+        <td colspan="2">合計</td>
+        <td style="color:#2e7d32">${Math.round(totalKm*10)/10}km</td>
+        <td style="font-size:12px;color:#3a6a3a">${purposeSummary}</td>
+    </tr>`
+
+    return `
+        <div style="margin-top:24px;margin-bottom:10px;font-size:16px;font-weight:700;color:#3a6a3a">🚗 自車使用記録</div>
+        <table>
+            <thead><tr>
+                <th>日付</th><th>目的</th><th>距離</th><th>メモ</th>
+            </tr></thead>
+            <tbody>${carRows}</tbody>
+        </table>`
 }
 
 function renderQR() {
