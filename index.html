@@ -261,6 +261,7 @@
             </div>
         </div>
         <button class="req-btn" onclick="goReq()">📝 シフト変更申請</button>
+        <button class="req-btn" style="margin-top:10px;color:#5a8a5a;border-color:#bbe0bb" onclick="goCar()">🚗 自車使用申請</button>
         <button class="req-btn" style="margin-top:10px;color:#e07050;border-color:#fed7aa" onclick="goFix()">⏰ 打刻補正申請（押し忘れ）</button>
         <button class="req-btn" style="margin-top:10px;color:#7c6090;border-color:#ddd1f0" onclick="goShiftView()">📅 今月のシフト表</button>
         <button class="req-btn" style="margin-top:10px;color:#b05080;border-color:#f9a8d4" onclick="goMyRecord()">📊 自分の勤務記録</button>
@@ -310,6 +311,31 @@
             <label>💬 理由・コメント（任意）</label>
             <textarea id="req-reason" placeholder="例：外部研修のため、通院のため など"></textarea>
             <button class="req-submit" onclick="submitRequest()">✉️ 申請する</button>
+        </div>
+    </div>
+
+    <!-- 画面: 自車使用申請 -->
+    <div id="v-car" class="hidden">
+        <button class="back-btn" onclick="show('v-act')">← 戻る</button>
+        <div class="sel-card">
+            <div class="sel-card-deco">🚗 自車使用申請</div>
+            <div class="sel-name" id="car-name"></div>
+            <div class="sel-status">業務で自分の車を使った記録</div>
+        </div>
+        <div class="req-form">
+            <label>📅 日付</label>
+            <input type="date" id="car-date">
+            <label>🎯 目的</label>
+            <select id="car-purpose">
+                <option value="送迎">送迎</option>
+                <option value="支援会議">支援会議</option>
+                <option value="その他">その他</option>
+            </select>
+            <label>📏 走行距離（km）</label>
+            <input type="number" id="car-distance" min="0" step="0.1" placeholder="例：12.5" inputmode="decimal">
+            <label>💬 メモ（任意）</label>
+            <textarea id="car-memo" placeholder="例：○○さん宅まで送迎"></textarea>
+            <button class="req-submit" style="background:linear-gradient(135deg,#bbe0bb,#7fbf7f)" onclick="submitCar()">✉️ 記録する</button>
         </div>
     </div>
 
@@ -533,7 +559,7 @@ function scheduleMidnightReset() {
 }
 
 function show(id) {
-    ['v-list','v-act','v-req','v-fix','v-ok','v-shift','v-personal'].forEach(v =>
+    ['v-list','v-act','v-req','v-fix','v-ok','v-shift','v-personal','v-car'].forEach(v =>
         document.getElementById(v).classList.toggle('hidden', v !== id)
     )
 }
@@ -593,6 +619,38 @@ async function submitFix() {
         document.getElementById('ok-who').textContent  = selEmp.name + '　' + date
         document.getElementById('ok-time').textContent = '申請完了 ✓'
         document.getElementById('ok-msg').textContent  = '確認後に反映されます 🌸'
+        show('v-ok')
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
+function goCar() {
+    document.getElementById('car-name').textContent = selEmp.name
+    document.getElementById('car-date').value = todayStr()
+    document.getElementById('car-purpose').value = '送迎'
+    document.getElementById('car-distance').value = ''
+    document.getElementById('car-memo').value = ''
+    show('v-car')
+}
+
+async function submitCar() {
+    const date     = document.getElementById('car-date').value
+    const purpose  = document.getElementById('car-purpose').value
+    const distance = parseFloat(document.getElementById('car-distance').value)
+    const memo     = document.getElementById('car-memo').value
+    if (!date) return alert('日付を選択してください')
+    if (!distance || distance <= 0) return alert('走行距離（km）を入力してください')
+    try {
+        await db.from('shift_requests').insert({
+            employee_id: selEmp.id, date,
+            requested_type: '自車使用',
+            status: 'approved',
+            reason: JSON.stringify({ purpose, distance, comment: memo }),
+            requested_hours: 0
+        })
+        document.getElementById('ok-act').textContent  = '自車使用を記録しました'
+        document.getElementById('ok-who').textContent  = selEmp.name + '　' + date
+        document.getElementById('ok-time').textContent = `${purpose}　${distance}km`
+        document.getElementById('ok-msg').textContent  = 'お疲れさまでした 🚗💕'
         show('v-ok')
     } catch(e) { alert('エラー: ' + e.message) }
 }
@@ -799,7 +857,7 @@ async function loadPersonalRecord() {
             .gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', personalEmpId)
             .gte('date', from).lte('date', to).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け'])
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用'])
     ])
 
     const byDate = {}
@@ -807,9 +865,10 @@ async function loadPersonalRecord() {
         if (!byDate[r.date]) byDate[r.date] = []
         byDate[r.date].push(r)
     }
-    const leaveByDate = {}, nakByDate = {}
+    const leaveByDate = {}, nakByDate = {}, carRecords = []
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakByDate[r.date] = r
+        else if (r.requested_type === '自車使用') carRecords.push(r)
         else leaveByDate[r.date] = r
     }
 
@@ -854,7 +913,8 @@ async function loadPersonalRecord() {
     }
 
     if (!rows) {
-        document.getElementById('personal-tbl').innerHTML =
+        const carOnly = buildCarTable(carRecords, parseInt(mon))
+        document.getElementById('personal-tbl').innerHTML = carOnly ||
             '<div style="text-align:center;color:#9ca3af;padding:40px 20px">この月の記録はありません</div>'
         return
     }
@@ -864,7 +924,7 @@ async function loadPersonalRecord() {
         <td style="padding:6px 3px;font-size:12px;text-align:center;color:#dc2626">${totalOt > 0 ? toHHMMFn(totalOt) : '-'}</td>
     </tr>`
 
-    document.getElementById('personal-tbl').innerHTML = `
+    const workTable = `
         <table style="width:100%;border-collapse:collapse;background:white;border-radius:12px;box-shadow:0 2px 8px rgba(255,150,170,.2);font-family:'Hiragino Sans','Yu Gothic UI',sans-serif">
             <thead><tr style="background:#fff0f4">
                 <th style="padding:6px 6px;font-size:10px;color:#c05070;text-align:left">日付</th>
@@ -876,6 +936,60 @@ async function loadPersonalRecord() {
                 <th style="padding:6px 3px;font-size:10px;color:#dc2626;text-align:center">残業</th>
             </tr></thead>
             <tbody>${rows}</tbody>
+        </table>`
+
+    document.getElementById('personal-tbl').innerHTML = workTable + buildCarTable(carRecords, parseInt(mon))
+}
+
+// 自車使用記録テーブルを生成
+function buildCarTable(carRecords, monNum) {
+    if (!carRecords || carRecords.length === 0) return ''
+    const DOW = ['日','月','火','水','木','金','土']
+    const parsed = carRecords.map(r => {
+        let purpose = '', distance = 0, comment = ''
+        try {
+            const d = JSON.parse(r.reason || '{}')
+            purpose  = d.purpose  || ''
+            distance = parseFloat(d.distance) || 0
+            comment  = d.comment  || ''
+        } catch(e) {}
+        return { date: r.date, purpose, distance, comment }
+    }).sort((a,b) => a.date.localeCompare(b.date))
+
+    let totalKm = 0
+    const byPurpose = {}
+    let carRows = ''
+    for (const c of parsed) {
+        totalKm += c.distance
+        byPurpose[c.purpose] = (byPurpose[c.purpose] || 0) + c.distance
+        const dateObj = new Date(c.date)
+        const d = dateObj.getDate()
+        const dow = dateObj.getDay()
+        carRows += `<tr style="border-bottom:1px solid #e0f0e0">
+            <td style="padding:5px 6px;font-size:12px;white-space:nowrap;font-weight:600;color:#3a6a3a">${monNum}/${d}（${DOW[dow]}）</td>
+            <td style="padding:5px 6px;font-size:12px;text-align:center">${c.purpose}</td>
+            <td style="padding:5px 6px;font-size:13px;text-align:center;font-weight:700;color:#2e7d32">${c.distance}km</td>
+            <td style="padding:5px 6px;font-size:11px;color:#6b7280;word-break:break-all">${c.comment || ''}</td>
+        </tr>`
+    }
+    const purposeSummary = Object.entries(byPurpose)
+        .map(([p, km]) => `${p} ${Math.round(km*10)/10}km`).join('　/　')
+    carRows += `<tr style="background:#eef7ee;font-weight:700;border-top:2px solid #a8d8a8">
+        <td style="padding:6px 6px;font-size:12px" colspan="2">合計</td>
+        <td style="padding:6px 6px;font-size:13px;text-align:center;color:#2e7d32">${Math.round(totalKm*10)/10}km</td>
+        <td style="padding:6px 6px;font-size:10px;color:#3a6a3a">${purposeSummary}</td>
+    </tr>`
+
+    return `
+        <div style="margin-top:24px;margin-bottom:8px;font-size:14px;font-weight:700;color:#3a6a3a">🚗 自車使用記録</div>
+        <table style="width:100%;border-collapse:collapse;background:white;border-radius:12px;box-shadow:0 2px 8px rgba(120,190,120,.2);font-family:'Hiragino Sans','Yu Gothic UI',sans-serif">
+            <thead><tr style="background:#eef7ee">
+                <th style="padding:6px 6px;font-size:10px;color:#3a6a3a;text-align:left">日付</th>
+                <th style="padding:6px 6px;font-size:10px;color:#3a6a3a;text-align:center">目的</th>
+                <th style="padding:6px 6px;font-size:10px;color:#3a6a3a;text-align:center">距離</th>
+                <th style="padding:6px 6px;font-size:10px;color:#3a6a3a;text-align:left">メモ</th>
+            </tr></thead>
+            <tbody>${carRows}</tbody>
         </table>`
 }
 
