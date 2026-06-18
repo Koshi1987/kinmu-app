@@ -961,7 +961,7 @@ function showShiftPicker(empId, date, current, tdEl) {
     const rect = tdEl.getBoundingClientRect()
     picker.style.cssText = `
         position:fixed;
-        top:${rect.bottom + 4}px;
+        visibility:hidden;
         left:${Math.min(rect.left, window.innerWidth - 230)}px;
         background:white;
         border:1px solid #e5e7eb;
@@ -997,6 +997,20 @@ function showShiftPicker(empId, date, current, tdEl) {
         picker.appendChild(btn)
     }
     document.body.appendChild(picker)
+
+    // 高さを測って、下に収まらなければ上側に表示（最下段でも見切れないように）
+    const ph = picker.offsetHeight
+    const spaceBelow = window.innerHeight - rect.bottom
+    let top
+    if (spaceBelow >= ph + 8) {
+        top = rect.bottom + 4                      // 下に表示
+    } else if (rect.top >= ph + 8) {
+        top = rect.top - ph - 4                     // 上に表示
+    } else {
+        top = Math.max(4, window.innerHeight - ph - 8)  // どちらも狭ければ画面内に収める
+    }
+    picker.style.top = `${top}px`
+    picker.style.visibility = 'visible'
 
     // 外側クリックで閉じる
     setTimeout(() => {
