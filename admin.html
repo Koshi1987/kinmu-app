@@ -916,8 +916,11 @@ async function loadShiftsMonthly() {
                     // ds > today（未来日）→ 何も加算しない（0スタート）
                 }
 
+                // 長いラベル（AM有休・時間有給など）は文字を縮小＋折り返して見切れ防止
+                const stFont = st.length >= 4 ? 8 : st.length === 3 ? 9 : 11
+                const arrow  = st.length <= 2 ? '<span style="font-size:8px;opacity:0.5">▾</span>' : ''
                 cells += `<td onclick="showShiftPicker('${emp.id}','${ds}','${st}',this)"
-                    style="background:${bg};text-align:center;font-size:11px;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;user-select:none;white-space:nowrap">${st}<span style="font-size:8px;opacity:0.5">▾</span></td>`
+                    style="background:${bg};text-align:center;font-size:${stFont}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;user-select:none;white-space:normal;word-break:break-word">${st}${arrow}</td>`
             }
 
             const isTarget = TARGET_NAMES_CHECK.some(n => emp.name.includes(n))
