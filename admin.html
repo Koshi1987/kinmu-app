@@ -107,7 +107,10 @@
             }
             @page { size: A4 portrait; margin: 10mm; }  /* デフォルト縦（シフト表はJSで横に切り替え） */
             header, .tabs, .sub-tabs, .sec-hd .btn, .sec-hd select, .form-row, .hd-btn,
-            #shift-legend, .sec-hd .week-nav button { display: none !important; }
+            #shift-legend, .sec-hd .week-nav button, .sec-hd label { display: none !important; }
+            /* 常勤加算チェック：デフォルトは印刷で省く。チェックONなら印刷にも含める */
+            .kasan-panel { display: none !important; }
+            body.print-kasan .kasan-panel { display: table-row !important; }
             .print-note { display: block !important; }
             body { background: white; }
             .content { padding: 0 !important; }
@@ -249,6 +252,10 @@
                     <select id="shift-team-filter" onchange="loadShiftsMonthly()">
                         <option value="all">全員</option>
                     </select>
+                    <label style="display:flex;align-items:center;gap:5px;font-size:13px;color:#374151;cursor:pointer;background:#f3f4f6;padding:7px 12px;border-radius:10px">
+                        <input type="checkbox" id="print-kasan-cb" onchange="document.body.classList.toggle('print-kasan', this.checked)" style="cursor:pointer">
+                        🖨️ 印刷に常勤加算チェックを含める
+                    </label>
                 </div>
             </div>
             <div class="print-note" id="pn-shifts"></div>
@@ -723,6 +730,20 @@ function getShiftMonth() {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
 }
 
+// 平日(月〜金)から祝日を除いた日数をカウント（upToDay指定でその日まで）
+function countWeekdaysExclHol(year, mon, upToDay) {
+    const y = parseInt(year), m = parseInt(mon)
+    const last = new Date(y, m, 0).getDate()
+    const end = (upToDay != null) ? Math.min(upToDay, last) : last
+    let n = 0
+    for (let d = 1; d <= end; d++) {
+        const dow = new Date(y, m - 1, d).getDay()
+        const ds = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+        if (dow !== 0 && dow !== 6 && !HOLIDAYS.has(ds)) n++
+    }
+    return n
+}
+
 async function loadShiftsMonthly() {
     const month = getShiftMonth()
     const [year, mon] = month.split('-')
@@ -814,6 +835,28 @@ async function loadShiftsMonthly() {
 
     const TARGET_NAMES = TARGET_NAMES_CHECK  // 上部で定義済み
     const targetEmpHours = {}
+
+    // 常勤加算 4枠（越原＝児発管は対象外）
+    const KASAN_SLOTS = [
+        { label: '舘石',          members: ['舘石'],             exclLeave: false },
+        { label: '池内',          members: ['池内'],             exclLeave: false },
+        { label: '大野',          members: ['大野'],             exclLeave: false },
+        { label: '川平+藤沢+名取', members: ['川平','藤沢','名取'], exclLeave: true  },
+    ]
+    const slotHours = {}, slotHasMember = {}
+    // リーノ／リーノ２タブの並び順と「加算要件対象」区切り位置
+    const ROSTER_CONFIG = [
+        { keys: ['梅内','小野','坂上','藤井','小澤','中野'],        dividerAfter: '藤井' },
+        { keys: ['越原','舘石','池内','川平','大野','名取','藤沢'], dividerAfter: '川平' },
+    ]
+    const yNum = parseInt(year), mNum = parseInt(mon)
+    const totalWeekdays = countWeekdaysExclHol(yNum, mNum)
+    const nowD = new Date()
+    let elapsedDay
+    if (yNum === nowD.getFullYear() && mNum === nowD.getMonth() + 1) elapsedDay = nowD.getDate()
+    else if (new Date(yNum, mNum - 1, 1) < new Date(nowD.getFullYear(), nowD.getMonth(), 1)) elapsedDay = lastDay
+    else elapsedDay = 0
+    const elapsedWeekdays = countWeekdaysExclHol(yNum, mNum, elapsedDay)
     let rows = ''
     for (const team of teams) {
         const te = displayEmps.filter(e => e.team_id === team.id)
@@ -821,7 +864,15 @@ async function loadShiftsMonthly() {
         if (teamFilter === 'all') {
             rows += `<tr class="team-row"><td colspan="${colCount}">${team.name}</td></tr>`
         }
-        for (const emp of te) {
+        // 並び順は全タブ共通。「加算要件対象」区切りはチーム別タブのみ表示
+        let teOrdered = te, dividerAfterName = null
+        const cfg = ROSTER_CONFIG.find(c => c.keys.some(k => te.some(e => e.name.includes(k))))
+        if (cfg) {
+            const idx = nm => { const i = cfg.keys.findIndex(k => nm.includes(k)); return i === -1 ? 999 : i }
+            teOrdered = [...te].sort((a, b) => idx(a.name) - idx(b.name))
+            if (teamFilter !== 'all') dividerAfterName = cfg.dividerAfter
+        }
+        for (const emp of teOrdered) {
             const roleTag = (teamFilter !== 'all' && emp.role) ? `<br><span style="font-size:10px;font-weight:400;color:#6b7280;line-height:1.3">${emp.role}</span>` : ''
             let cells = `<td style="white-space:normal;word-break:break-all;font-weight:600;position:sticky;left:0;background:white;z-index:1;padding:5px 8px;font-size:13px;min-width:64px;max-width:80px;line-height:1.4">${emp.name}${roleTag}</td>`
             let totalHours = 0
@@ -839,6 +890,8 @@ async function loadShiftsMonthly() {
                 if (teamFilter === 'all') {
                     // 全員表示：予定シフト時間で集計
                     totalHours += SHIFT_HOURS[st] || 0
+                    const paidLeaveAll = ['有給','AM有休','PM有休','時間有給']  // 研修は実働扱い
+                    if (!paidLeaveAll.includes(st)) totalHoursExcLeave += SHIFT_HOURS[st] || 0
                 } else {
                     // チーム別表示：実績タイムカードで集計
                     const recs = attMap[key] || []
@@ -855,7 +908,8 @@ async function loadShiftsMonthly() {
                         const leaveTypes = ['有給','AM有休','PM有休','時間有給','研修']
                         if (leaveTypes.includes(st)) {
                             totalHours += SHIFT_HOURS[st] || 0
-                            // totalHoursExcLeave には加算しない（有休日は除外）
+                            // 研修は実働扱い（有休のみ除外）
+                            if (st === '研修') totalHoursExcLeave += SHIFT_HOURS[st] || 0
                         }
                         // 打刻忘れ・通常勤務で未打刻の日は 0（計上しない）
                     }
@@ -868,6 +922,13 @@ async function loadShiftsMonthly() {
 
             const isTarget = TARGET_NAMES_CHECK.some(n => emp.name.includes(n))
             if (isTarget) targetEmpHours[emp.name] = totalHoursExcLeave  // 175hチェックは有休除きで判定
+            // 常勤加算スロットへ加算（常勤①②③は有休込み、合算組は有休除き）
+            KASAN_SLOTS.forEach((slot, i) => {
+                if (slot.members.some(n => emp.name.includes(n))) {
+                    slotHours[i] = (slotHours[i] || 0) + (slot.exclLeave ? totalHoursExcLeave : totalHours)
+                    slotHasMember[i] = true
+                }
+            })
             const weeklyAvg = (totalHours / (lastDay / 7)).toFixed(1)
             const totalDisp = teamFilter === 'all'
                 ? `${totalHours}h`
@@ -886,33 +947,57 @@ async function loadShiftsMonthly() {
                 }
             }
             rows += `<tr>${cells}</tr>`
+            if (dividerAfterName && emp.name.includes(dividerAfterName)) {
+                rows += `<tr><td colspan="${colCount}" style="padding:0;border-top:3px double #1e3a8a;border-bottom:3px double #1e3a8a;background:#eef2ff">
+                    <div style="position:sticky;left:0;display:inline-block;padding:5px 10px;font-size:12px;font-weight:800;color:#1e3a8a;letter-spacing:1px">加算要件対象</div>
+                </td></tr>`
+            }
         }
         if (teamFilter !== 'all') {
             rows += `<tr><td colspan="${colCount}" style="font-size:11px;padding:6px 10px;background:#f8fafc;color:#374151;border-top:2px solid #cbd5e1;border-bottom:2px solid #cbd5e1;white-space:normal">${LEGEND}</td></tr>`
         }
     }
 
-    // 175時間チェック（川平・藤沢・名取の合計）※有休除きの実勤務時間で判定
-    if (Object.keys(targetEmpHours).length > 0) {
-        const combined    = Object.values(targetEmpHours).reduce((a, b) => a + b, 0)
-        const isShort     = combined < 175
-        const dispTotal   = teamFilter === 'all' ? `${combined}h` : `${combined.toFixed(1)}h`
-        const shortBy     = 175 - combined
-        const dispShort   = teamFilter === 'all' ? `${shortBy}h` : `${shortBy.toFixed(1)}h`
-        const color       = isShort ? '#dc2626' : '#15803d'
-        const bgColor     = isShort ? '#fef2f2' : '#f0fdf4'
-        const borderColor = isShort ? '#fca5a5' : '#86efac'
-        const detail      = Object.entries(targetEmpHours)
-            .map(([n, h]) => `${n}: ${teamFilter === 'all' ? h + 'h' : h.toFixed(1) + 'h'}`).join('　')
-        rows += `<tr style="border-top:3px solid ${borderColor}">
-            <td style="position:sticky;left:0;background:${bgColor};padding:6px 8px;font-size:12px;font-weight:700;color:${color};white-space:nowrap;z-index:1">
-                ${isShort ? '⚠️' : '✅'} 3人合計<br><span style="font-size:9px;font-weight:400">有休除き</span>
-            </td>
-            <td colspan="${colCount - 1}" style="background:${bgColor};font-size:12px;font-weight:700;color:${color};padding:6px 12px">
-                ${dispTotal} / 175h　${isShort ? `⚠️ あと ${dispShort} 不足` : '✅ 達成'}
-                <span style="font-size:11px;font-weight:400;margin-left:10px;opacity:0.8">（${detail}）</span>
-            </td>
-        </tr>`
+    // 常勤加算チェック（4枠を個別判定）
+    if (Object.keys(slotHasMember).length > 0) {
+        const isPlan    = teamFilter === 'all'
+        const reqFull   = totalWeekdays * 8       // 満額（1常勤あたり）
+        const reqToDate = elapsedWeekdays * 8     // 今日までの想定ペース
+        let allOk = true, chips = ''
+        const circles = '①②③④⑤'
+        KASAN_SLOTS.forEach((slot, i) => {
+            if (!slotHasMember[i]) return
+            const h      = slotHours[i] || 0
+            const target = isPlan ? reqFull : reqToDate
+            const ok     = isPlan ? (h >= reqFull) : (reqToDate === 0 ? true : h >= reqToDate)
+            if (!ok) allOk = false
+            const shortBy = target - h
+            const proj    = (!isPlan && elapsedWeekdays > 0) ? (h / elapsedWeekdays * totalWeekdays) : null
+            const projOk  = proj != null && proj >= reqFull
+            const valColor = ok ? '#15803d' : '#dc2626'
+            chips += `<div style="border:1.5px solid ${ok ? '#86efac' : '#fca5a5'};border-radius:10px;padding:6px 11px;background:${ok ? '#f0fdf4' : '#fef2f2'};min-width:128px">
+                <div style="font-size:10px;color:#6b7280;font-weight:600">常勤${circles[i]} ${slot.label}${slot.exclLeave ? '<span style="color:#9d174d">（有休除）</span>' : ''}</div>
+                <div style="font-size:16px;font-weight:800;color:${valColor};line-height:1.3">${h.toFixed(1)}<span style="font-size:10px;font-weight:600">h</span> ${ok ? '✅' : '⚠️'}</div>
+                <div style="font-size:10px;color:#6b7280">${isPlan ? `目標 ${reqFull}h` : `想定 ${reqToDate}h`}${(!ok && shortBy > 0) ? ` ／ あと${shortBy.toFixed(1)}h` : ''}</div>
+                ${proj != null ? `<div style="font-size:10px;color:${projOk ? '#15803d' : '#b45309'}">着地見込 ${proj.toFixed(0)}h ${projOk ? '✅' : '⚠️'}</div>` : ''}
+            </div>`
+        })
+        const headColor = allOk ? '#15803d' : '#dc2626'
+        const headBg    = allOk ? '#f0fdf4' : '#fef2f2'
+        const title = isPlan
+            ? `🏅 常勤加算チェック（予定）｜ 必要: 平日${totalWeekdays}日 × 8h = ${reqFull}h/常勤`
+            : `🏅 常勤加算 進捗（実績）｜ ${mNum}/${elapsedDay}時点・経過平日${elapsedWeekdays}日/全${totalWeekdays}日（想定${reqToDate}h／満額${reqFull}h）`
+        const verdict = isPlan
+            ? (allOk ? '✅ 4枠すべて達成 → 加算要件クリア' : '⚠️ 未達の枠があります → このシフトでは加算要件を満たしません')
+            : (elapsedWeekdays === 0 ? 'ℹ️ まだ実績がありません' : (allOk ? '✅ 全枠 順調なペース' : '⚠️ ペースが遅れている枠があります'))
+        rows += `<tr class="kasan-panel"><td colspan="${colCount}" style="padding:0;background:${headBg};border-top:3px solid ${allOk ? '#86efac' : '#fca5a5'}">
+            <div style="padding:10px 14px">
+                <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px">${title}</div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px">${chips}</div>
+                <div style="margin-top:8px;font-size:13px;font-weight:700;color:${headColor}">${verdict}</div>
+                <div style="font-size:10px;color:#9ca3af;margin-top:3px">※越原（児発管）は加算対象外。常勤①②③は有休も勤務に含む／合算組は実働＋研修（有休除く）。</div>
+            </div>
+        </td></tr>`
     }
 
     document.getElementById('shift-tbl-monthly').innerHTML =
