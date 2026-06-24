@@ -744,6 +744,16 @@ function countWeekdaysExclHol(year, mon, upToDay) {
     return n
 }
 
+// 計画相談 内訳チップ（兼任職員の計画相談時間／現場勤務時間）
+function planConsultChip(name, keikaku, genba, total, teamLabel, note) {
+    return `<div style="border:1.5px solid #c4b5fd;border-radius:10px;padding:8px 12px;background:white;min-width:210px">
+        <div style="font-size:13px;font-weight:700;color:#5b21b6;margin-bottom:4px">${name}</div>
+        <div style="font-size:12px;color:#374151;margin-bottom:2px">🗂️ 計画相談 <b style="color:#7c3aed;font-size:14px">${keikaku.toFixed(1)}h</b></div>
+        <div style="font-size:12px;color:#374151">🏠 ${teamLabel}現場勤務 <b style="color:#15803d;font-size:14px">${genba.toFixed(1)}h</b></div>
+        <div style="font-size:10px;color:#9ca3af;margin-top:4px;line-height:1.4">合計 ${total.toFixed(1)}h<br>${note}</div>
+    </div>`
+}
+
 async function loadShiftsMonthly() {
     const month = getShiftMonth()
     const [year, mon] = month.split('-')
@@ -844,6 +854,8 @@ async function loadShiftsMonthly() {
         { label: '川平+藤沢+名取', members: ['川平','藤沢','名取'], exclLeave: true  },
     ]
     const slotHours = {}, slotHasMember = {}
+    // 計画相談 内訳用（坂上＝リーノ1、池内＝リーノ2、藤井＝坂上の代替要員）
+    let sakagamiTotal = 0, fujiiTotal = 0, ikeuchiTotal = 0
     // リーノ／リーノ２タブの並び順と「加算要件対象」区切り位置
     const ROSTER_CONFIG = [
         { keys: ['梅内','小野','坂上','藤井','小澤','中野'],        dividerAfter: '藤井' },
@@ -932,6 +944,10 @@ async function loadShiftsMonthly() {
                     slotHasMember[i] = true
                 }
             })
+            // 計画相談 内訳用に各人の総勤務時間を捕捉
+            if (emp.name.includes('坂上')) sakagamiTotal = totalHours
+            if (emp.name.includes('藤井')) fujiiTotal    = totalHours
+            if (emp.name.includes('池内')) ikeuchiTotal  = totalHours
             const weeklyAvg = (totalHours / (lastDay / 7)).toFixed(1)
             const totalDisp = teamFilter === 'all'
                 ? `${totalHours}h`
@@ -958,6 +974,32 @@ async function loadShiftsMonthly() {
         }
         if (teamFilter !== 'all') {
             rows += `<tr><td colspan="${colCount}" style="font-size:11px;padding:6px 10px;background:#f8fafc;color:#374151;border-top:2px solid #cbd5e1;border-bottom:2px solid #cbd5e1;white-space:normal">${LEGEND}</td></tr>`
+        }
+    }
+
+    // 計画相談 内訳（坂上＝リーノ1、池内＝リーノ2）※実績ベース・チーム別タブのみ
+    if (teamFilter !== 'all') {
+        const reqFull = totalWeekdays * 8
+        let kChips = ''
+        if (displayEmps.some(e => e.name.includes('坂上'))) {
+            const keikaku = Math.min(sakagamiTotal, fujiiTotal)
+            const genba   = Math.max(0, sakagamiTotal - keikaku)
+            kChips += planConsultChip('坂上', keikaku, genba, sakagamiTotal, 'リーノ1',
+                `藤井さんの勤務時間（${fujiiTotal.toFixed(1)}h）を計画相談に充当`)
+        }
+        if (displayEmps.some(e => e.name.includes('池内'))) {
+            const trioHours = slotHours[3] || 0
+            const excess    = Math.max(0, trioHours - reqFull)
+            const keikaku   = Math.min(ikeuchiTotal, excess)
+            const genba     = Math.max(0, ikeuchiTotal - keikaku)
+            kChips += planConsultChip('池内', keikaku, genba, ikeuchiTotal, 'リーノ2',
+                `川平・藤沢・名取の常勤超過分（${excess.toFixed(1)}h ＝ 合計${trioHours.toFixed(1)}h − 基準${reqFull}h）を充当`)
+        }
+        if (kChips) {
+            rows += `<tr><td colspan="${colCount}" style="padding:10px 14px;background:#f5f3ff;border-top:3px solid #c4b5fd">
+                <div style="font-size:13px;font-weight:700;color:#5b21b6;margin-bottom:8px">🗂️ 計画相談 内訳（実績）</div>
+                <div style="display:flex;flex-wrap:wrap;gap:10px">${kChips}</div>
+            </td></tr>`
         }
     }
 
