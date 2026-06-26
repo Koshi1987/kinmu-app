@@ -641,7 +641,10 @@ async function loadRecords() {
             const { label: leaveLabel, mins: leaveMins }   = calcLeave(leaveMap[emp.id])
             const { label: nakLabel,  mins: nakMins }      = calcNakamuke(nakamMap[emp.id])
             const shiftType = shiftTypeMap[emp.id] || emp.default_shift || '日勤'
-            const totalMins = calcMins(recs, shiftType) + leaveMins - nakMins
+            // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
+            const fullDayLeave = leaveMap[emp.id] && ['有給','研修'].includes(leaveMap[emp.id].requested_type)
+            const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
+            const totalMins = calcMins(recs, shiftType) + effLeaveMins - nakMins
             const ot = calcOvertime(recs, shiftType)
             if (!ci && !co && !leaveLabel && !nakLabel) continue
             const leaveBadge = leaveLabel
@@ -1862,7 +1865,10 @@ async function loadMonthly() {
         const { label: nakLabel,  mins: nakMins }     = calcNakamuke(nakamByDate[ds])
         const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
         const workedMins = calcMins(recs, shiftType)
-        const dayTotal = workedMins + leaveMins - nakMins
+        // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
+        const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
+        const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
+        const dayTotal = workedMins + effLeaveMins - nakMins
         const ot = calcOvertime(recs, shiftType)
         totalMins += dayTotal
         totalOt += ot
