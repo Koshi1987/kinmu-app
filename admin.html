@@ -148,6 +148,18 @@
                 max-width: none !important;
                 font-size: 8pt !important;
             }
+            /* 監査用（常勤換算 勤務形態一覧表）：A4横にフィット */
+            #audit-tbl { overflow: visible !important; }
+            #audit-tbl > div { overflow-x: visible !important; overflow-y: visible !important; max-height: none !important; }
+            #audit-tbl table { font-size: 8pt !important; width: 100% !important; table-layout: fixed !important; }
+            #audit-tbl th, #audit-tbl td {
+                padding: 1px 2px !important; font-size: 8pt !important; min-width: 0 !important; overflow: hidden !important;
+            }
+            #audit-tbl th:first-child, #audit-tbl td:first-child {
+                width: 8% !important; position: static !important; min-width: 0 !important; max-width: none !important; font-size: 7pt !important;
+            }
+            #audit-tbl th:last-child, #audit-tbl td:last-child { width: 8% !important; }
+            .audit-panel { page-break-inside: avoid; margin-top: 8px !important; }
         }
 
         .hidden { display: none !important; }
@@ -288,6 +300,10 @@
                         <button onclick="changeAuditMonth(1)">▶</button>
                     </div>
                     <select id="audit-team-filter" onchange="loadAuditShifts()"></select>
+                    <label style="display:flex;align-items:center;gap:5px;font-size:13px;color:#374151;cursor:pointer;background:#f3f4f6;padding:7px 12px;border-radius:10px">
+                        <input type="checkbox" id="audit-border-cb" checked onchange="auditShowBorder=this.checked; loadAuditShifts()" style="cursor:pointer">
+                        🔵 手動設定の青枠を表示
+                    </label>
                 </div>
             </div>
             <div class="print-note" id="pn-audit"></div>
@@ -1192,10 +1208,11 @@ function changeShiftMonth(d) { shiftMonthOffset += d; loadShiftsMonthly() }
 
 // ===== 監査用シフト表 =====
 let auditMonthOffset = 0
+let auditShowBorder = true  // 手動設定セルの青枠を表示するか
 const EMP_TYPE = {
     '越原':'児発管','小野':'児発管',
     '舘石':'常勤','大野':'常勤','梅内':'常勤','小澤':'常勤','中野':'常勤',
-    '池内':'非常勤','川平':'非常勤','藤沢':'非常勤','名取':'非常勤','坂上':'非常勤','藤井':'非常勤',
+    '池内':'非常勤','川平':'非常勤','藤沢':'非常勤','名取':'非常勤','坂上':'非常勤','藤井':'非常勤','宮之上':'非常勤',
 }
 const AUDIT_DEFAULT = {
     '舘石':'日勤','大野':'日勤','梅内':'日勤','小澤':'日勤','中野':'日勤',
@@ -1204,6 +1221,7 @@ const AUDIT_DEFAULT = {
 }
 const AUDIT_KENNIN = ['坂上','池内']  // 計画相談兼任（日勤多すぎチェック対象）
 const AUDIT_SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','休']
+const AUDIT_START = '2026-06-11'  // 勤務表の使用開始日（これより前は監査用も無記入・集計対象外）
 const AUDIT_ROSTER = [
     ['梅内','小野','坂上','藤井','小澤','中野'],
     ['越原','舘石','池内','川平','大野','名取','藤沢'],
@@ -1223,6 +1241,17 @@ function getAuditMonth() {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
 }
 function changeAuditMonth(d) { auditMonthOffset += d; loadAuditShifts() }
+
+// 予定シフト（変更・承認済みを含む）のその日の勤務形態を返す
+const AUDIT_LEAVE_SPECIAL = ['休','有給','AM有休','PM有休','時間有給','研修']
+function planShiftOf(emp, dow, ds, overrideMap) {
+    const key = `${emp.id}_${ds}`
+    if (overrideMap[key] !== undefined) return overrideMap[key]
+    const isWknd = dow===0 || dow===6
+    const fixedOff = (emp.fixed_off_days||[]).includes(dow)
+    const isHoliday = HOLIDAYS.has(ds)
+    return (isWknd || fixedOff || isHoliday) ? '休' : (emp.default_shift || '日勤')
+}
 
 async function loadAuditShifts() {
     const month = getAuditMonth()
@@ -1247,14 +1276,34 @@ async function loadAuditShifts() {
     const auditMap = {}
     for (const s of aud || []) if (s.shift_type) auditMap[`${s.employee_id}_${s.date}`] = s.shift_type
 
-    const totalWeekdays = countWeekdaysExclHol(yNum, mNum)
-    const reqFTE = totalWeekdays * 8
+    // 予定シフト（有休・休み・春夏など承認済み）を自動下書きのベースに取得
+    const { data: planData } = await db.from('shifts').select('*').gte('date', from).lte('date', to)
+    const overrideMap = {}
+    for (const s of planData || []) if (s.shift_type) overrideMap[`${s.employee_id}_${s.date}`] = s.shift_type
+    const empByName = sub => employees.find(e => e.name.includes(sub))
+
+    // 実績照合用：実際の打刻と承認済み有休（過去日の見落とし防止）
+    const todayStr2 = new Date().toLocaleDateString('sv-SE')
+    const [{ data: attData }, { data: leaveData }] = await Promise.all([
+        db.from('attendance').select('employee_id,date').eq('type','clock_in').gte('date', from).lte('date', to),
+        db.from('shift_requests').select('employee_id,date').eq('status','approved')
+            .in('requested_type',['有給','AM有休','PM有休','時間有給','研修']).gte('date', from).lte('date', to)
+    ])
+    const clockedSet = new Set((attData || []).map(r => `${r.employee_id}_${r.date}`))
+    const leaveSet   = new Set((leaveData || []).map(r => `${r.employee_id}_${r.date}`))
+    const WORKING_TYPES = ['日勤','午前','午後','変則','春夏']
+    const conflicts = []
 
     const days = []
     for (let d = 1; d <= lastDay; d++) {
         const date = new Date(yNum, mNum-1, d)
         days.push({ d, dow: date.getDay(), ds: `${month}-${String(d).padStart(2,'0')}` })
     }
+
+    // 監査は月単位で見るため、表示・常勤換算は月全体（6/1〜）で算出
+    const hasOldPeriod = from < AUDIT_START  // 6/10以前（旧タイムカード期間）を含む月か
+    const totalWeekdays = countWeekdaysExclHol(yNum, mNum)
+    const reqFTE = totalWeekdays * 8
 
     // 並び替え（監査用ロスター）
     const cfg = AUDIT_ROSTER.find(keys => keys.some(k => displayEmps.some(e => e.name.includes(k))))
@@ -1267,6 +1316,9 @@ async function loadAuditShifts() {
     // 事業所の非常勤要件（リーノ2＝2.0／リーノ1＝1.0）
     const teamHas = nm => displayEmps.some(e => e.name.includes(nm))
     const nonRegReq = teamHas('池内') ? 2.0 : teamHas('坂上') ? 1.0 : 0
+    // 常勤換算グループに含める非常勤（指定の人だけ。宮之上など他の非常勤は表示のみで集計外）
+    const groupMembers = teamHas('池内') ? ['池内','川平','名取','藤沢'] : teamHas('坂上') ? ['坂上','藤井'] : []
+    const isGroupMember = nm => groupMembers.some(k => nm.includes(k))
 
     let hdr = '<th style="min-width:78px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:12px;padding:4px">名前</th>'
     for (const { d, dow, ds } of days) {
@@ -1275,6 +1327,48 @@ async function loadAuditShifts() {
         hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
     }
     hdr += `<th style="background:#eef2ff;min-width:62px;text-align:center;font-size:11px;padding:3px 4px">月勤務<br>常勤換算</th>`
+
+    // ===== 池内 FTE自動最適化（午前を最大化し、2.0常勤に届く分だけ日勤を配置） =====
+    const ikeuchiNikkinDays = new Set()
+    const ikeuchi = empByName('池内')
+    if (ikeuchi && nonRegReq > 0) {
+        // 監査用の勤務形態を求める小関数（手動>予定ベース）
+        const auditStOf = (e, dow, ds) => {
+            const k = `${e.id}_${ds}`
+            if (auditMap[k] !== undefined) return auditMap[k]
+            const p = planShiftOf(e, dow, ds, overrideMap)
+            return (p === '日勤') ? auditDefaultOf(e.name) : p
+        }
+        // 1. 他3人（川平・藤沢・名取）の月勤務時間（有休除く）
+        let othersHours = 0
+        for (const nm of ['川平','藤沢','名取']) {
+            const o = empByName(nm); if (!o) continue
+            for (const { dow, ds } of days) othersHours += auditHours(auditStOf(o, dow, ds), true)
+        }
+        // 2. 池内の「午前/日勤を割り当てられる日」と固定分（手動・休・有休・春夏）
+        const autoDays = []
+        let ikeuchiFixed = 0
+        for (const { dow, ds } of days) {
+            const k = `${ikeuchi.id}_${ds}`
+            if (auditMap[k] !== undefined) { ikeuchiFixed += auditHours(auditMap[k], true); continue }
+            const p = planShiftOf(ikeuchi, dow, ds, overrideMap)
+            if (p !== '日勤' && p !== '午前') { ikeuchiFixed += auditHours(p, true); continue } // 休・有給・春夏など固定
+            autoDays.push(ds)
+        }
+        // 3. 目標に必要な日勤日数（午前最大化＝日勤最小）
+        const target   = nonRegReq * reqFTE
+        const gozenH   = SHIFT_HOURS['午前'] || 4.5
+        const base     = othersHours + ikeuchiFixed + autoDays.length * gozenH
+        const deficit  = target - base
+        const perNik   = (SHIFT_HOURS['日勤'] || 8) - gozenH
+        let numNik     = deficit > 0 ? Math.ceil(deficit / perNik) : 0
+        numNik = Math.min(numNik, autoDays.length)
+        // 4. 日勤日を月内に均等分散
+        if (numNik > 0) {
+            const step = autoDays.length / numNik
+            for (let i = 0; i < numNik; i++) ikeuchiNikkinDays.add(autoDays[Math.floor(i * step)])
+        }
+    }
 
     const regulars = [], nonRegs = []
     let nonRegHours = 0
@@ -1289,23 +1383,39 @@ async function loadAuditShifts() {
         let empHours = 0, gozen = 0, nikkin = 0
         for (const { dow, ds } of days) {
             const key = `${emp.id}_${ds}`
-            const isWknd = dow===0||dow===6
-            const fixedOff = (emp.fixed_off_days||[]).includes(dow)
-            const isHoliday = HOLIDAYS.has(ds)
-            const operating = !(isWknd || fixedOff || isHoliday)
-            const defaultSt = operating ? auditDefaultOf(emp.name) : '休'
-            const st = auditMap[key] !== undefined ? auditMap[key] : defaultSt
+            // 予定シフトをベースに自動下書き（有休・休み・春夏・変則などはそのまま反映）
+            const planSt = planShiftOf(emp, dow, ds, overrideMap)
+            let draft = (planSt === '日勤') ? auditDefaultOf(emp.name) : planSt
+            // 坂上・池内は休みを考慮して午前/日勤を自動割当（勤務日のみ）
+            if (['午前','午後','日勤','変則'].includes(draft)) {
+                if (emp.name.includes('坂上')) {
+                    const fuj = empByName('藤井')
+                    const fOff = fuj ? AUDIT_LEAVE_SPECIAL.includes(planShiftOf(fuj, dow, ds, overrideMap)) : false
+                    draft = fOff ? '日勤' : '午前'  // 藤井が休み→日勤、それ以外→午前
+                } else if (emp.name.includes('池内')) {
+                    draft = ikeuchiNikkinDays.has(ds) ? '日勤' : '午前'  // FTE自動最適化で割当（午前=計画相談を最大化）
+                }
+            }
+            const st = auditMap[key] !== undefined ? auditMap[key] : draft
             const isOv = auditMap[key] !== undefined
             const bg = SHIFT_COLORS[st] || '#fff'
             if (!isJihatsu) empHours += auditHours(st, isNonReg)
             if (st === '午前') gozen++
             if (st === '日勤') nikkin++
+            // 実績照合：過去日に「監査=勤務」なのに 有休あり or 打刻なし → 要確認（赤枠）
+            let conflict = false
+            if (!isJihatsu && ds >= AUDIT_START && ds < todayStr2 && WORKING_TYPES.includes(st) && (leaveSet.has(key) || !clockedSet.has(key))) {
+                conflict = true
+                conflicts.push({ name: emp.name, ds, reason: leaveSet.has(key) ? '有休あり' : '打刻なし' })
+            }
+            const ring = conflict ? 'box-shadow:inset 0 0 0 2px #dc2626;' : (isOv && auditShowBorder ? 'box-shadow:inset 0 0 0 2px #6366f1;' : '')
+            const mark = conflict ? '<span style="color:#dc2626;font-weight:800;font-size:10px">!</span>' : ''
             const f = st.length>=4?8:st.length===3?9:11
-            cells += `<td onclick="showAuditPicker('${emp.id}','${ds}','${st}',this)" style="background:${bg};text-align:center;font-size:${f}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;${isOv?'box-shadow:inset 0 0 0 2px #6366f1;':''}user-select:none">${st}</td>`
+            cells += `<td onclick="showAuditPicker('${emp.id}','${ds}','${st}',this)" title="${conflict?('要確認: 実績と相違（'+(leaveSet.has(key)?'有休あり':'打刻なし')+'）'):''}" style="background:${bg};text-align:center;font-size:${f}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;${ring}user-select:none">${st}${mark}</td>`
         }
         const fte = empHours / reqFTE
         if (isReg) regulars.push({ name: emp.name, fte })
-        if (isNonReg) { nonRegs.push({ name: emp.name, fte }); nonRegHours += empHours }
+        if (isNonReg && isGroupMember(emp.name)) { nonRegs.push({ name: emp.name, fte }); nonRegHours += empHours }
         if (isAuditKennin(emp.name)) kenninStat[emp.name] = { gozen, nikkin }
         const fteCell = isJihatsu ? '<span style="color:#9ca3af">対象外</span>' : `${empHours.toFixed(1)}h<br><b>${fte.toFixed(2)}</b>`
         cells += `<td style="background:#eef2ff;text-align:center;font-size:11px;padding:3px 4px">${fteCell}</td>`
@@ -1321,7 +1431,19 @@ async function loadAuditShifts() {
     const nonRegDetail = nonRegs.map(r => `${r.name} ${r.fte.toFixed(2)}`).join('　/　')
 
     let panel = `<div class="audit-panel" style="margin-top:16px;background:#f8fafc;border-radius:12px;padding:14px 16px;border:1px solid #e5e7eb">
-        <div style="font-size:14px;font-weight:700;color:#374151;margin-bottom:10px">🏅 常勤換算チェック（監査用・予定）｜ 基準: 平日${totalWeekdays}日 × 8h = ${reqFTE}h ＝ 常勤1人</div>`
+        <div style="font-size:14px;font-weight:700;color:#374151;margin-bottom:10px">🏅 常勤換算チェック｜ 基準: 平日${totalWeekdays}日 × 8h = ${reqFTE}h ＝ 常勤1人</div>`
+    if (hasOldPeriod) panel += `<div style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 10px;margin-bottom:10px">※常勤換算は月全体で算出。6/10以前は旧タイムカードで管理のため、実績照合（打刻チェック）の対象外です。</div>`
+    // 実績照合バナー（過去日の見落とし防止）
+    if (conflicts.length) {
+        const list = conflicts.slice(0,12).map(c => `${c.name} ${c.ds.slice(5)}（${c.reason}）`).join('　/　')
+        panel += `<div style="border:2px solid #fca5a5;background:#fef2f2;border-radius:10px;padding:10px 12px;margin-bottom:12px">
+            <div style="font-size:13px;font-weight:800;color:#dc2626">⚠️ 実績照合：要確認 ${conflicts.length}件（表の赤枠「!」のセル）</div>
+            <div style="font-size:11px;color:#991b1b;margin-top:4px;line-height:1.6">予定では勤務ですが、実際は<b>有休取得</b>または<b>打刻なし（欠勤の可能性）</b>です。実態に合わせてセルを修正してください。</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:4px">${list}${conflicts.length>12?'　他…':''}</div>
+        </div>`
+    } else {
+        panel += `<div style="font-size:12px;color:#15803d;font-weight:600;margin-bottom:12px">✅ 実績照合：過去日で予定と実績の相違はありません</div>`
+    }
     if (regulars.length) {
         panel += `<div style="margin-bottom:10px"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">常勤（有休も算入）</div><div style="display:flex;flex-wrap:wrap;gap:6px">${regChips}</div></div>`
     }
@@ -1341,10 +1463,10 @@ async function loadAuditShifts() {
             const warn = nikkin > gozen
             kChips += `<div style="border:1.5px solid ${warn?'#fca5a5':'#bfdbfe'};border-radius:8px;padding:5px 10px;background:${warn?'#fef2f2':'#eff6ff'};font-size:12px"><b>${n}</b>（兼任）午前${gozen}日 / 日勤${nikkin}日 ${warn?'⚠️ 日勤が多め':'✅'}</div>`
         }
-        panel += `<div style="margin-top:10px"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">日勤チェック（計画相談兼任は午前中心が自然）</div><div style="display:flex;flex-wrap:wrap;gap:6px">${kChips}</div></div>`
+        panel += `<div style="margin-top:10px"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">日勤チェック</div><div style="display:flex;flex-wrap:wrap;gap:6px">${kChips}</div></div>`
     }
     const jihatsuNames = displayEmps.filter(e=>empTypeOf(e.name)==='児発管').map(e=>e.name).join('・') || 'なし'
-    panel += `<div style="font-size:10px;color:#9ca3af;margin-top:10px">※児発管（${jihatsuNames}）は配置の常勤換算対象外。計画相談（午後）はこの表に含めないため自然に除外。非常勤の有休は勤務時間に算入していません。</div></div>`
+    panel += `<div style="font-size:10px;color:#9ca3af;margin-top:10px">※児発管（${jihatsuNames}）は配置の常勤換算対象外。</div></div>`
 
     document.getElementById('audit-tbl').innerHTML = table + panel
 }
@@ -1363,6 +1485,12 @@ function showAuditPicker(empId, date, current, tdEl) {
         btn.onclick = (e) => { e.stopPropagation(); picker.remove(); setAuditShift(empId, date, s, tdEl) }
         picker.appendChild(btn)
     }
+    // 自動に戻すボタン（手動設定を解除して自動配置へ）
+    const resetBtn = document.createElement('button')
+    resetBtn.textContent = '↩️ 自動に戻す'
+    resetBtn.style.cssText = `flex:1 0 100%;padding:6px 9px;border-radius:6px;font-size:11px;cursor:pointer;font-weight:700;background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;margin-top:3px`
+    resetBtn.onclick = (e) => { e.stopPropagation(); picker.remove(); resetAuditShift(empId, date) }
+    picker.appendChild(resetBtn)
     document.body.appendChild(picker)
     const ph = picker.offsetHeight, spaceBelow = window.innerHeight - rect.bottom
     let top
@@ -1382,6 +1510,12 @@ async function setAuditShift(empId, date, value, tdEl) {
     const { data } = await db.from('audit_shifts').select('id').eq('employee_id', empId).eq('date', date)
     if (data && data.length > 0) await db.from('audit_shifts').update({ shift_type: value }).eq('id', data[0].id)
     else await db.from('audit_shifts').insert({ employee_id: empId, date, shift_type: value })
+    loadAuditShifts()
+}
+
+// 手動設定を解除して自動配置に戻す（青枠を消す）
+async function resetAuditShift(empId, date) {
+    await db.from('audit_shifts').delete().eq('employee_id', empId).eq('date', date)
     loadAuditShifts()
 }
 
@@ -2265,8 +2399,9 @@ document.getElementById('rec-date').value = new Date().toLocaleDateString('sv-SE
     styleEl.id = 'print-orientation'
     document.head.appendChild(styleEl)
     window.addEventListener('beforeprint', function() {
-        const isShift = !document.getElementById('tab-shifts').classList.contains('hidden')
-        styleEl.textContent = isShift
+        const isWide = !document.getElementById('tab-shifts').classList.contains('hidden')
+                    || !document.getElementById('tab-audit').classList.contains('hidden')
+        styleEl.textContent = isWide
             ? '@media print { @page { size: A4 landscape; margin: 6mm; } }'
             : '@media print { @page { size: A4 portrait; margin: 10mm; } }'
     })
