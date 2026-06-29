@@ -181,6 +181,7 @@
         <div class="tab active"  onclick="switchTab('today')">📊 今日の状況</div>
         <div class="tab"         onclick="switchTab('records')">📅 勤務記録</div>
         <div class="tab"         onclick="switchTab('shifts')">シフト表</div>
+        <div class="tab"         onclick="switchTab('audit')">🔍 監査用</div>
         <div class="tab"         onclick="switchTab('requests')" id="tab-btn-requests">📬 申請確認</div>
         <div class="tab"         onclick="switchTab('employees')">👥 職員管理</div>
         <div class="tab"         onclick="switchTab('qr')">📱 QRコード</div>
@@ -274,6 +275,23 @@
                 <small style="color:#9ca3af;padding:3px 0">（セルをクリックで変更）</small>
             </div>
             <div id="shift-tbl-monthly"></div>
+        </div>
+
+        <!-- 監査用シフト表 -->
+        <div id="tab-audit" class="hidden">
+            <div class="sec-hd">
+                <span class="sec-title">常勤換算 勤務形態一覧表</span>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                    <div class="week-nav">
+                        <button onclick="changeAuditMonth(-1)">◀</button>
+                        <span class="week-label" id="audit-month-label"></span>
+                        <button onclick="changeAuditMonth(1)">▶</button>
+                    </div>
+                    <select id="audit-team-filter" onchange="loadAuditShifts()"></select>
+                </div>
+            </div>
+            <div class="print-note" id="pn-audit"></div>
+            <div id="audit-tbl"></div>
         </div>
 
         <!-- 申請確認 -->
@@ -505,18 +523,19 @@ async function loadMaster() {
 
 // ---- タブ切り替え ----
 function switchTab(name) {
-    const names = ['today','records','shifts','requests','employees','qr']
+    const names = ['today','records','shifts','audit','requests','employees','qr']
     document.querySelectorAll('.tab').forEach((t, i) =>
         t.classList.toggle('active', names[i] === name)
     )
     names.forEach(n =>
         document.getElementById('tab-' + n).classList.toggle('hidden', n !== name)
     )
-    document.querySelector('.content').style.maxWidth = (name === 'shifts') ? 'none' : ''
+    document.querySelector('.content').style.maxWidth = (name === 'shifts' || name === 'audit') ? 'none' : ''
     if (name === 'today')     loadToday()
     if (name === 'employees') { renderEmployees(); loadLeaveBalances() }
     if (name === 'qr')        renderQR()
     if (name === 'shifts')    loadShiftsMonthly()
+    if (name === 'audit')     loadAuditShifts()
     if (name === 'requests')  loadRequests()
 }
 
@@ -1170,6 +1189,201 @@ async function setShift(empId, date, value, tdEl) {
 }
 
 function changeShiftMonth(d) { shiftMonthOffset += d; loadShiftsMonthly() }
+
+// ===== 監査用シフト表 =====
+let auditMonthOffset = 0
+const EMP_TYPE = {
+    '越原':'児発管','小野':'児発管',
+    '舘石':'常勤','大野':'常勤','梅内':'常勤','小澤':'常勤','中野':'常勤',
+    '池内':'非常勤','川平':'非常勤','藤沢':'非常勤','名取':'非常勤','坂上':'非常勤','藤井':'非常勤',
+}
+const AUDIT_DEFAULT = {
+    '舘石':'日勤','大野':'日勤','梅内':'日勤','小澤':'日勤','中野':'日勤',
+    '池内':'午前','坂上':'午前','藤沢':'午前','名取':'午前',
+    '川平':'午後','藤井':'午後',
+}
+const AUDIT_KENNIN = ['坂上','池内']  // 計画相談兼任（日勤多すぎチェック対象）
+const AUDIT_SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','休']
+const AUDIT_ROSTER = [
+    ['梅内','小野','坂上','藤井','小澤','中野'],
+    ['越原','舘石','池内','川平','大野','名取','藤沢'],
+]
+
+function empTypeOf(name)     { for (const k in EMP_TYPE) if (name.includes(k)) return EMP_TYPE[k]; return '常勤' }
+function auditDefaultOf(name){ for (const k in AUDIT_DEFAULT) if (name.includes(k)) return AUDIT_DEFAULT[k]; return '日勤' }
+function isAuditKennin(name) { return AUDIT_KENNIN.some(k => name.includes(k)) }
+function auditHours(st, isNonReg) {
+    const paidLeave = ['有給','AM有休','PM有休','時間有給']
+    if (isNonReg && paidLeave.includes(st)) return 0  // 非常勤は有休を勤務時間に算入しない
+    return SHIFT_HOURS[st] || 0
+}
+function getAuditMonth() {
+    const now = new Date()
+    const d = new Date(now.getFullYear(), now.getMonth() + auditMonthOffset, 1)
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
+}
+function changeAuditMonth(d) { auditMonthOffset += d; loadAuditShifts() }
+
+async function loadAuditShifts() {
+    const month = getAuditMonth()
+    const [year, mon] = month.split('-')
+    const yNum = parseInt(year), mNum = parseInt(mon)
+    const lastDay = new Date(yNum, mNum, 0).getDate()
+    const from = `${month}-01`, to = `${month}-${String(lastDay).padStart(2,'0')}`
+
+    document.getElementById('audit-month-label').textContent = `${year}年${mon}月`
+    document.getElementById('pn-audit').textContent = `常勤換算 勤務形態一覧表 ${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
+
+    // チーム選択（リーノ2＝池内のいるチームを既定）
+    const filterEl = document.getElementById('audit-team-filter')
+    const prev = filterEl.value
+    filterEl.innerHTML = teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('')
+    if (prev) filterEl.value = prev
+    else { const r2 = employees.find(e => e.name.includes('池内')); if (r2) filterEl.value = r2.team_id }
+    const teamId = parseInt(filterEl.value)
+    const displayEmps = employees.filter(e => e.team_id === teamId)
+
+    const { data: aud } = await db.from('audit_shifts').select('*').gte('date', from).lte('date', to)
+    const auditMap = {}
+    for (const s of aud || []) if (s.shift_type) auditMap[`${s.employee_id}_${s.date}`] = s.shift_type
+
+    const totalWeekdays = countWeekdaysExclHol(yNum, mNum)
+    const reqFTE = totalWeekdays * 8
+
+    const days = []
+    for (let d = 1; d <= lastDay; d++) {
+        const date = new Date(yNum, mNum-1, d)
+        days.push({ d, dow: date.getDay(), ds: `${month}-${String(d).padStart(2,'0')}` })
+    }
+
+    // 並び替え（監査用ロスター）
+    const cfg = AUDIT_ROSTER.find(keys => keys.some(k => displayEmps.some(e => e.name.includes(k))))
+    let ordered = displayEmps
+    if (cfg) {
+        const idx = nm => { const i = cfg.findIndex(k => nm.includes(k)); return i===-1?999:i }
+        ordered = [...displayEmps].sort((a,b)=>idx(a.name)-idx(b.name))
+    }
+
+    // 事業所の非常勤要件（リーノ2＝2.0／リーノ1＝1.0）
+    const teamHas = nm => displayEmps.some(e => e.name.includes(nm))
+    const nonRegReq = teamHas('池内') ? 2.0 : teamHas('坂上') ? 1.0 : 0
+
+    let hdr = '<th style="min-width:78px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:12px;padding:4px">名前</th>'
+    for (const { d, dow, ds } of days) {
+        const isHol = HOLIDAYS.has(ds)
+        const bg = (dow===0||isHol)?'#fee2e2':dow===6?'#dbeafe':'#f8fafc'
+        hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
+    }
+    hdr += `<th style="background:#eef2ff;min-width:62px;text-align:center;font-size:11px;padding:3px 4px">月勤務<br>常勤換算</th>`
+
+    const regulars = [], nonRegs = []
+    let nonRegHours = 0
+    const kenninStat = {}
+
+    let rows = ''
+    for (const emp of ordered) {
+        const etype = empTypeOf(emp.name)
+        const isNonReg = etype === '非常勤', isReg = etype === '常勤', isJihatsu = etype === '児発管'
+        const tColor = isNonReg ? '#b45309' : isReg ? '#15803d' : '#6b7280'
+        let cells = `<td style="position:sticky;left:0;background:white;z-index:1;padding:4px 8px;font-size:13px;font-weight:600;white-space:nowrap">${emp.name}<br><span style="font-size:9px;color:${tColor}">${etype}</span></td>`
+        let empHours = 0, gozen = 0, nikkin = 0
+        for (const { dow, ds } of days) {
+            const key = `${emp.id}_${ds}`
+            const isWknd = dow===0||dow===6
+            const fixedOff = (emp.fixed_off_days||[]).includes(dow)
+            const isHoliday = HOLIDAYS.has(ds)
+            const operating = !(isWknd || fixedOff || isHoliday)
+            const defaultSt = operating ? auditDefaultOf(emp.name) : '休'
+            const st = auditMap[key] !== undefined ? auditMap[key] : defaultSt
+            const isOv = auditMap[key] !== undefined
+            const bg = SHIFT_COLORS[st] || '#fff'
+            if (!isJihatsu) empHours += auditHours(st, isNonReg)
+            if (st === '午前') gozen++
+            if (st === '日勤') nikkin++
+            const f = st.length>=4?8:st.length===3?9:11
+            cells += `<td onclick="showAuditPicker('${emp.id}','${ds}','${st}',this)" style="background:${bg};text-align:center;font-size:${f}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;${isOv?'box-shadow:inset 0 0 0 2px #6366f1;':''}user-select:none">${st}</td>`
+        }
+        const fte = empHours / reqFTE
+        if (isReg) regulars.push({ name: emp.name, fte })
+        if (isNonReg) { nonRegs.push({ name: emp.name, fte }); nonRegHours += empHours }
+        if (isAuditKennin(emp.name)) kenninStat[emp.name] = { gozen, nikkin }
+        const fteCell = isJihatsu ? '<span style="color:#9ca3af">対象外</span>' : `${empHours.toFixed(1)}h<br><b>${fte.toFixed(2)}</b>`
+        cells += `<td style="background:#eef2ff;text-align:center;font-size:11px;padding:3px 4px">${fteCell}</td>`
+        rows += `<tr>${cells}</tr>`
+    }
+
+    const table = `<div style="overflow-x:auto"><table style="border-collapse:collapse;background:white;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07)"><thead><tr>${hdr}</tr></thead><tbody>${rows}</tbody></table></div>`
+
+    // ===== 常勤換算パネル =====
+    const nonRegTotalFTE = nonRegHours / reqFTE
+    const nonRegOk = nonRegReq > 0 ? nonRegTotalFTE >= nonRegReq : true
+    const regChips = regulars.map(r => `<div style="border:1.5px solid #86efac;border-radius:8px;padding:5px 10px;background:#f0fdf4;font-size:12px"><b>${r.name}</b> ${r.fte.toFixed(2)}人</div>`).join('')
+    const nonRegDetail = nonRegs.map(r => `${r.name} ${r.fte.toFixed(2)}`).join('　/　')
+
+    let panel = `<div class="audit-panel" style="margin-top:16px;background:#f8fafc;border-radius:12px;padding:14px 16px;border:1px solid #e5e7eb">
+        <div style="font-size:14px;font-weight:700;color:#374151;margin-bottom:10px">🏅 常勤換算チェック（監査用・予定）｜ 基準: 平日${totalWeekdays}日 × 8h = ${reqFTE}h ＝ 常勤1人</div>`
+    if (regulars.length) {
+        panel += `<div style="margin-bottom:10px"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">常勤（有休も算入）</div><div style="display:flex;flex-wrap:wrap;gap:6px">${regChips}</div></div>`
+    }
+    if (nonRegReq > 0) {
+        panel += `<div style="border:2px solid ${nonRegOk?'#86efac':'#fca5a5'};border-radius:10px;padding:10px 12px;background:${nonRegOk?'#f0fdf4':'#fef2f2'}">
+            <div style="font-size:12px;color:#6b7280;margin-bottom:3px">非常勤グループ（有休除く）：${nonRegs.map(r=>r.name).join('＋')}</div>
+            <div style="font-size:18px;font-weight:800;color:${nonRegOk?'#15803d':'#dc2626'}">${nonRegTotalFTE.toFixed(2)}人 / 必要${nonRegReq.toFixed(1)}人 ${nonRegOk?'✅ 達成':'⚠️ 不足'}</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:3px">内訳：${nonRegDetail}　（合計${nonRegHours.toFixed(1)}h）</div>
+        </div>`
+    }
+    // 日勤多すぎアラート（兼任者）
+    const kNames = Object.keys(kenninStat)
+    if (kNames.length) {
+        let kChips = ''
+        for (const n of kNames) {
+            const { gozen, nikkin } = kenninStat[n]
+            const warn = nikkin > gozen
+            kChips += `<div style="border:1.5px solid ${warn?'#fca5a5':'#bfdbfe'};border-radius:8px;padding:5px 10px;background:${warn?'#fef2f2':'#eff6ff'};font-size:12px"><b>${n}</b>（兼任）午前${gozen}日 / 日勤${nikkin}日 ${warn?'⚠️ 日勤が多め':'✅'}</div>`
+        }
+        panel += `<div style="margin-top:10px"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">日勤チェック（計画相談兼任は午前中心が自然）</div><div style="display:flex;flex-wrap:wrap;gap:6px">${kChips}</div></div>`
+    }
+    const jihatsuNames = displayEmps.filter(e=>empTypeOf(e.name)==='児発管').map(e=>e.name).join('・') || 'なし'
+    panel += `<div style="font-size:10px;color:#9ca3af;margin-top:10px">※児発管（${jihatsuNames}）は配置の常勤換算対象外。計画相談（午後）はこの表に含めないため自然に除外。非常勤の有休は勤務時間に算入していません。</div></div>`
+
+    document.getElementById('audit-tbl').innerHTML = table + panel
+}
+
+function showAuditPicker(empId, date, current, tdEl) {
+    const existing = document.getElementById('audit-picker')
+    if (existing) { existing.remove(); return }
+    const picker = document.createElement('div')
+    picker.id = 'audit-picker'
+    const rect = tdEl.getBoundingClientRect()
+    picker.style.cssText = `position:fixed;visibility:hidden;left:${Math.min(rect.left, window.innerWidth-180)}px;background:white;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.18);padding:8px;z-index:9999;display:flex;flex-wrap:wrap;gap:5px;max-width:180px`
+    for (const s of AUDIT_SHIFT_TYPES) {
+        const btn = document.createElement('button')
+        btn.textContent = s
+        btn.style.cssText = `padding:5px 9px;border-radius:6px;font-size:12px;cursor:pointer;font-weight:600;background:${SHIFT_COLORS[s]||'#f3f4f6'};color:#374151;border:2px solid ${s===current?'#6366f1':'transparent'}`
+        btn.onclick = (e) => { e.stopPropagation(); picker.remove(); setAuditShift(empId, date, s, tdEl) }
+        picker.appendChild(btn)
+    }
+    document.body.appendChild(picker)
+    const ph = picker.offsetHeight, spaceBelow = window.innerHeight - rect.bottom
+    let top
+    if (spaceBelow >= ph + 8) top = rect.bottom + 4
+    else if (rect.top >= ph + 8) top = rect.top - ph - 4
+    else top = Math.max(4, window.innerHeight - ph - 8)
+    picker.style.top = `${top}px`
+    picker.style.visibility = 'visible'
+    setTimeout(() => {
+        const close = (e) => { if (!picker.contains(e.target)) { picker.remove(); document.removeEventListener('click', close) } }
+        document.addEventListener('click', close)
+    }, 50)
+}
+
+async function setAuditShift(empId, date, value, tdEl) {
+    if (tdEl) tdEl.style.background = SHIFT_COLORS[value] || '#fff'
+    const { data } = await db.from('audit_shifts').select('id').eq('employee_id', empId).eq('date', date)
+    if (data && data.length > 0) await db.from('audit_shifts').update({ shift_type: value }).eq('id', data[0].id)
+    else await db.from('audit_shifts').insert({ employee_id: empId, date, shift_type: value })
+    loadAuditShifts()
+}
 
 // ---- 職員管理 ----
 function renderEmployees() {
