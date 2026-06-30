@@ -160,8 +160,14 @@
             }
             #audit-tbl th:last-child, #audit-tbl td:last-child { width: 8% !important; }
             .audit-panel { page-break-inside: avoid; margin-top: 8px !important; }
+            /* 全員分まとめて印刷：コンテナのみ表示 */
+            body.printing-all > *:not(#print-all-container) { display: none !important; }
+            body.printing-all #print-all-container { display: block !important; }
+            #print-all-container table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+            #print-all-container th, #print-all-container td { padding: 3px 6px; border-bottom: 1px solid #ddd; text-align: left; }
         }
 
+        #print-all-container { display: none; }
         .hidden { display: none !important; }
     </style>
 </head>
@@ -233,6 +239,7 @@
                     <select id="monthly-emp"></select>
                     <input type="month" id="monthly-month">
                     <button class="btn btn-primary" onclick="loadMonthly()">表示</button>
+                    <button class="btn btn-ghost" id="print-all-btn" onclick="printAllMonthly()">🖨 全員分まとめて印刷（所長除く）</button>
                 </div>
                 <div class="print-note" id="pn-monthly-emp"></div>
                 <div class="tbl-wrap" id="monthly-tbl"></div>
@@ -420,6 +427,9 @@
         </div>
     </div>
 </div>
+
+<!-- 全員分まとめて印刷用コンテナ（通常は非表示） -->
+<div id="print-all-container"></div>
 
 <script>
 // =============================================
@@ -2224,6 +2234,102 @@ async function loadMonthly() {
     document.getElementById('monthly-tbl').innerHTML =
         `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th><th style="color:#9d174d">有給</th><th style="color:#9a3412">中抜け</th></tr></thead><tbody>${rows}</tbody></table>`
         + buildMonthlyCarTable(carRecords)
+}
+
+// 1職員分の月間個人記録HTML（11日〜翌月10日）を生成（まとめて印刷用）
+async function buildEmpMonthlyHTML(emp, month) {
+    const [year, mon] = month.split('-')
+    const from = `${month}-11`
+    const nextMonthDate = new Date(parseInt(year), parseInt(mon), 1)
+    const nextYear = nextMonthDate.getFullYear()
+    const nextMon  = String(nextMonthDate.getMonth() + 1).padStart(2, '0')
+    const to = `${nextYear}-${nextMon}-10`
+
+    const [{ data }, { data: reqData }, { data: shiftData }] = await Promise.all([
+        db.from('attendance').select('*').eq('employee_id', emp.id).gte('date', from).lte('date', to).order('timestamp'),
+        db.from('shift_requests').select('*').eq('employee_id', emp.id).gte('date', from).lte('date', to)
+            .eq('status', 'approved').in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用']),
+        db.from('shifts').select('date, shift_type').eq('employee_id', emp.id).gte('date', from).lte('date', to)
+    ])
+    const byDate = {}
+    for (const r of data || []) { (byDate[r.date] = byDate[r.date] || []).push(r) }
+    const leaveByDate = {}, nakamByDate = {}, carRecords = []
+    for (const r of reqData || []) {
+        if (r.requested_type === '中抜け') nakamByDate[r.date] = r
+        else if (r.requested_type === '自車使用') carRecords.push(r)
+        else leaveByDate[r.date] = r
+    }
+    const shiftByDate = {}
+    for (const s of shiftData || []) if (s.shift_type) shiftByDate[s.date] = s.shift_type
+
+    const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
+    const dates = []
+    const lastDayOfMonth = new Date(parseInt(year), parseInt(mon), 0).getDate()
+    for (let d = 11; d <= lastDayOfMonth; d++) dates.push(`${month}-${String(d).padStart(2,'0')}`)
+    for (let d = 1; d <= 10; d++) dates.push(`${nextYear}-${nextMon}-${String(d).padStart(2,'0')}`)
+
+    let rows = '', totalMins = 0, totalOt = 0
+    for (const ds of dates) {
+        const dateObj = new Date(ds)
+        const dayName = ['日','月','火','水','木','金','土'][dateObj.getDay()]
+        const recs = (byDate[ds] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
+        const ci = recs.find(r => r.type === 'clock_in')
+        const bs = recs.find(r => r.type === 'break_start')
+        const be = recs.find(r => r.type === 'break_end')
+        const co = [...recs].reverse().find(r => r.type === 'clock_out')
+        const { label: leaveLabel, mins: leaveMins } = calcLeave(leaveByDate[ds])
+        const { label: nakLabel,  mins: nakMins }    = calcNakamuke(nakamByDate[ds])
+        const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
+        const workedMins = calcMins(recs, shiftType)
+        const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
+        const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
+        const dayTotal = workedMins + effLeaveMins - nakMins
+        const ot = calcOvertime(recs, shiftType)
+        totalMins += dayTotal; totalOt += ot
+        if (!ci && !co && !leaveLabel && !nakLabel) continue
+        const weekend = dateObj.getDay() === 0 || dateObj.getDay() === 6
+        const leaveBadge = leaveLabel ? `<span style="background:#fbcfe8;color:#9d174d;font-size:10px;padding:1px 6px;border-radius:999px;font-weight:600">${leaveLabel}</span>` : ''
+        const nakBadge = nakLabel ? `<span style="background:#fed7aa;color:#9a3412;font-size:10px;padding:1px 6px;border-radius:999px;font-weight:600">${nakLabel}</span>` : ''
+        rows += `<tr ${weekend ? 'style="color:#9ca3af"' : ''}><td>${dateObj.getMonth()+1}/${dateObj.getDate()}（${dayName}）</td><td>${ci ? fmt(ci.timestamp) : '-'}</td><td>${bs ? fmt(bs.timestamp) : '-'}</td><td>${be ? fmt(be.timestamp) : '-'}</td><td>${co ? fmt(co.timestamp) : '-'}</td><td>${dayTotal > 0 ? toHHMM(dayTotal) : '-'}</td><td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td><td>${leaveBadge}</td><td>${nakBadge}</td></tr>`
+    }
+    if (!rows) rows = '<tr><td colspan="9" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    rows += `<tr class="total-row"><td>合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td><td></td><td></td></tr>`
+
+    return `<div style="page-break-after:always;padding:0 0 12px">
+        <div style="font-size:16px;font-weight:700;margin-bottom:4px">${emp.name}　月間個人記録</div>
+        <div style="font-size:12px;color:#444;margin-bottom:8px">${year}年${mon}月11日 〜 ${nextYear}年${nextMon}月10日</div>
+        <table>
+            <thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th><th style="color:#9d174d">有給</th><th style="color:#9a3412">中抜け</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+        ${buildMonthlyCarTable(carRecords)}
+    </div>`
+}
+
+// 所長（梅内）を除く全職員の月間個人記録をまとめて印刷
+async function printAllMonthly() {
+    const month = document.getElementById('monthly-month').value
+    if (!month) return alert('月を選択してください')
+    const targets = employees.filter(e => !e.name.includes('梅内'))  // 所長＝梅内を除く
+    if (!targets.length) return alert('対象の職員がいません')
+    const btn = document.getElementById('print-all-btn')
+    btn.disabled = true; btn.textContent = '⏳ 準備中…'
+    try {
+        const sections = []
+        for (const emp of targets) sections.push(await buildEmpMonthlyHTML(emp, month))
+        document.getElementById('print-all-container').innerHTML = sections.join('')
+    } catch(e) {
+        alert('エラー: ' + e.message); btn.disabled = false; btn.textContent = '🖨 全員分まとめて印刷（所長除く）'; return
+    }
+    btn.disabled = false; btn.textContent = '🖨 全員分まとめて印刷（所長除く）'
+    document.body.classList.add('printing-all')
+    const cleanup = () => {
+        document.body.classList.remove('printing-all')
+        document.getElementById('print-all-container').innerHTML = ''
+        window.removeEventListener('afterprint', cleanup)
+    }
+    window.addEventListener('afterprint', cleanup)
+    window.print()
 }
 
 // 月間個人記録：自車使用記録テーブルを生成
