@@ -207,6 +207,7 @@
                 <button class="btn btn-ghost" onclick="loadToday()">🔄 更新</button>
             </div>
             <div class="print-note" id="pn-today"></div>
+            <div id="missed-punch-banner" style="display:none"></div>
             <div class="tbl-wrap" id="today-tbl"></div>
         </div>
 
@@ -214,8 +215,7 @@
         <div id="tab-records" class="hidden">
             <div class="sub-tabs">
                 <button class="sub-tab active" onclick="switchRecordTab('daily')">📅 日別記録</button>
-                <button class="sub-tab"        onclick="switchRecordTab('weekly')">📈 週間集計</button>
-                <button class="sub-tab"        onclick="switchRecordTab('monthly')">👤 月間記録</button>
+                <button class="sub-tab"        onclick="switchRecordTab('monthly')">👤 月間個人記録</button>
             </div>
             <!-- 日別記録 -->
             <div id="sub-daily">
@@ -225,19 +225,6 @@
                     <button class="btn btn-primary" onclick="loadRecords()">表示</button>
                 </div>
                 <div id="rec-tbl"></div>
-            </div>
-            <!-- 週間集計 -->
-            <div id="sub-weekly" class="hidden">
-                <div class="sec-hd">
-                    <span class="sec-title">週間集計</span>
-                    <div class="week-nav">
-                        <button onclick="changeWeek(-1)">◀</button>
-                        <span class="week-label" id="week-label"></span>
-                        <button onclick="changeWeek(1)">▶</button>
-                    </div>
-                </div>
-                <div class="print-note" id="pn-weekly"></div>
-                <div class="tbl-wrap" id="weekly-tbl"></div>
             </div>
             <!-- 月間記録 -->
             <div id="sub-monthly" class="hidden">
@@ -549,17 +536,25 @@ function switchTab(name) {
     if (name === 'shifts')    loadShiftsMonthly()
     if (name === 'audit')     loadAuditShifts()
     if (name === 'requests')  loadRequests()
+    if (name === 'records')   initDaily()
 }
 
 function switchRecordTab(name) {
-    ['daily','weekly','monthly'].forEach(n =>
+    ['daily','monthly'].forEach(n =>
         document.getElementById('sub-' + n).classList.toggle('hidden', n !== name)
     )
     document.querySelectorAll('.sub-tab').forEach((t, i) =>
-        t.classList.toggle('active', ['daily','weekly','monthly'][i] === name)
+        t.classList.toggle('active', ['daily','monthly'][i] === name)
     )
-    if (name === 'weekly')  loadWeekly()
+    if (name === 'daily')   initDaily()
     if (name === 'monthly') initMonthly()
+}
+
+// 日別記録：当日分を自動表示
+function initDaily() {
+    const el = document.getElementById('rec-date')
+    el.value = new Date().toLocaleDateString('sv-SE')
+    loadRecords()
 }
 
 // ---- 今日の状況 ----
@@ -627,6 +622,51 @@ async function loadToday() {
         <p style="margin-top:12px;font-size:13px;color:#6b7280">
             出勤中: ${present}名 ／ 全${employees.length}名
         </p>`
+
+    checkAllMissedPunches()  // 過去2週間の打刻もれを上部に表示
+}
+
+// 全職員の打刻もれ（過去14日・今日を除く）を検出して上部に赤字表示
+async function checkAllMissedPunches() {
+    const banner = document.getElementById('missed-punch-banner')
+    banner.style.display = 'none'; banner.innerHTML = ''
+    const today = new Date()
+    const fromD = new Date(today); fromD.setDate(today.getDate() - 14)
+    const { data } = await db.from('attendance')
+        .select('employee_id,date,type')
+        .gte('date', fromD.toLocaleDateString('sv-SE')).lt('date', today.toLocaleDateString('sv-SE'))
+    if (!data || !data.length) return
+    const map = {}
+    for (const r of data) {
+        const k = `${r.employee_id}_${r.date}`
+        ;(map[k] = map[k] || new Set()).add(r.type)
+    }
+    const DOW_J = ['日','月','火','水','木','金','土']
+    const issues = []
+    for (const k in map) {
+        const t = map[k]
+        const hasCI = t.has('clock_in'), hasCO = t.has('clock_out')
+        const hasBS = t.has('break_start'), hasBE = t.has('break_end')
+        let missing = ''
+        if (hasCI && !hasCO)      missing = '退勤'
+        else if (!hasCI && hasCO) missing = '出勤'
+        else if (hasBS && !hasBE) missing = '休憩アウト'
+        else if (!hasBS && hasBE) missing = '休憩イン'
+        if (!missing) continue
+        const us = k.lastIndexOf('_')
+        const empId = k.slice(0, us), date = k.slice(us + 1)
+        const emp = employees.find(e => String(e.id) === empId)
+        const d = new Date(date)
+        issues.push({ name: emp ? emp.name : '?', date, label: `${d.getMonth()+1}/${d.getDate()}(${DOW_J[d.getDay()]}) ${missing}し忘れ` })
+    }
+    if (!issues.length) return
+    issues.sort((a,b) => a.date.localeCompare(b.date))
+    banner.style.display = 'block'
+    banner.innerHTML = `<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:12px;padding:12px 16px;margin-bottom:14px">
+        <div style="font-size:15px;font-weight:800;color:#dc2626;margin-bottom:6px">⚠️ 打刻もれの可能性（過去2週間）${issues.length}件</div>
+        <div style="font-size:13px;color:#991b1b;line-height:1.9">${issues.map(i => `<b>${i.name}</b> さん：${i.label}`).join('<br>')}</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:6px">→ 職員に打刻時間修正申請をしてもらうか、「✏️手動打刻補正」で修正してください。</div>
+    </div>`
 }
 
 // ---- 勤務記録 ----
@@ -1040,8 +1080,10 @@ function calcActualDayHours(recs, nakamukeMins = 0, shiftType = '') {
     const minBreak  = (!isHarunatsu && elapsedMin >= 420) ? 60 : 0
     const effBrkMin = isHarunatsu ? 0 : Math.max(minBreak, actualBrkMin)
     const totalMin  = elapsedMin - effBrkMin
-    // 18:00以降が残業
-    const base18 = new Date(end); base18.setHours(18, 0, 0, 0)
+    // 残業の基準：春夏は16:30、それ以外は18:00以降
+    const base18 = new Date(end)
+    if (isHarunatsu) base18.setHours(16, 30, 0, 0)
+    else             base18.setHours(18, 0, 0, 0)
     const otMin  = end > base18 ? (end - base18) / 60000 : 0
     const regMin = Math.max(0, totalMin - otMin)
     return { regular: regMin / 60, overtime: otMin / 60 }
@@ -2288,9 +2330,9 @@ function calcMins(records, shiftType = '') {
         }
         else if (r.type === 'break_start')             bs = t
         else if (r.type === 'break_end' && bs)       { brk += (t-bs)/60000; bs = null }
-        else if (r.type === 'clock_out' && ci)         result = (t-ci)/60000 - brk
+        else if (r.type === 'clock_out' && ci)         result = (t-ci)/60000 - (isHarunatsu ? 0 : brk)
     }
-    if (ci && result === 0) result = (new Date()-ci)/60000 - brk
+    if (ci && result === 0) result = (new Date()-ci)/60000 - (isHarunatsu ? 0 : brk)
     // 7時間以上の勤務（退勤打刻あり）は最低60分の休憩を保証（春夏を除く）
     if (!isHarunatsu) {
         const hasCO = records.some(r => r.type === 'clock_out')

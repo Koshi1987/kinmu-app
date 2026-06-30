@@ -242,6 +242,7 @@
             <div class="sel-name" id="sel-name"></div>
             <div class="sel-status" id="sel-st"></div>
         </div>
+        <div id="punch-warning" style="display:none"></div>
         <div class="act-grid">
             <div class="act-cell">
                 <button class="act-btn a-ci" id="b-ci" onclick="rec('clock_in')">🟢<br>出勤</button>
@@ -260,11 +261,11 @@
                 <div class="act-time" id="t-co"></div>
             </div>
         </div>
-        <button class="req-btn" onclick="goReq()">📝 シフト変更申請</button>
-        <button class="req-btn" style="margin-top:10px;color:#5a8a5a;border-color:#bbe0bb" onclick="goCar()">🚗 自車使用申請</button>
-        <button class="req-btn" style="margin-top:10px;color:#e07050;border-color:#fed7aa" onclick="goFix()">⏰ 打刻補正申請（押し忘れ）</button>
+        <button class="req-btn" onclick="goReq()">📝 シフト申請</button>
+        <button class="req-btn" style="margin-top:10px;color:#e07050;border-color:#fed7aa" onclick="goFix()">⏰ 打刻時間修正申請（押し忘れ等）</button>
         <button class="req-btn" style="margin-top:10px;color:#7c6090;border-color:#ddd1f0" onclick="goShiftView()">📅 今月のシフト表</button>
         <button class="req-btn" style="margin-top:10px;color:#b05080;border-color:#f9a8d4" onclick="goMyRecord()">📊 自分の勤務記録</button>
+        <button class="req-btn" style="margin-top:10px;color:#5a8a5a;border-color:#bbe0bb" onclick="goCar()">🚗 自車使用申請</button>
     </div>
 
     <!-- 画面3: シフト変更申請 -->
@@ -273,7 +274,7 @@
         <div class="sel-card">
             <div class="sel-card-deco">🌸 🌼 🌸</div>
             <div class="sel-name" id="req-name"></div>
-            <div class="sel-status">シフト変更申請</div>
+            <div class="sel-status">シフト申請</div>
         </div>
         <div class="req-form">
             <label>📅 日付</label>
@@ -343,9 +344,9 @@
     <div id="v-fix" class="hidden">
         <button class="back-btn" onclick="show('v-act')">← 戻る</button>
         <div class="sel-card">
-            <div class="sel-card-deco">⏰ 打刻補正申請</div>
+            <div class="sel-card-deco">⏰ 打刻時間修正申請（押し忘れ等）</div>
             <div class="sel-name" id="fix-name"></div>
-            <div class="sel-status">押し忘れた打刻を申請してください</div>
+            <div class="sel-status">押し忘れ等の打刻を修正申請してください</div>
         </div>
         <div class="req-form">
             <label>📅 対象日</label>
@@ -522,7 +523,46 @@ async function selEmpFn(id) {
             new Date(r.timestamp).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
     }
 
+    checkMissedPunches(id)  // 過去の打刻もれをチェックして上部に警告
     show('v-act')
+}
+
+// 過去30日（今日を除く）の打刻もれを検出して赤字警告を表示
+async function checkMissedPunches(id) {
+    const warnEl = document.getElementById('punch-warning')
+    warnEl.style.display = 'none'; warnEl.innerHTML = ''
+    const DOW_J = ['日','月','火','水','木','金','土']
+    const today = new Date()
+    const fromD = new Date(today); fromD.setDate(today.getDate() - 30)
+    const { data } = await db.from('attendance')
+        .select('date,type').eq('employee_id', id)
+        .gte('date', fromD.toLocaleDateString('sv-SE')).lt('date', todayStr())
+        .order('date')
+    if (!data || !data.length) return
+    const byDate = {}
+    for (const r of data) { (byDate[r.date] = byDate[r.date] || new Set()).add(r.type) }
+    const issues = []
+    for (const date of Object.keys(byDate).sort()) {
+        const t = byDate[date]
+        const hasCI = t.has('clock_in'), hasCO = t.has('clock_out')
+        const hasBS = t.has('break_start'), hasBE = t.has('break_end')
+        let missing = ''
+        if (hasCI && !hasCO)       missing = '退勤'
+        else if (!hasCI && hasCO)  missing = '出勤'
+        else if (hasBS && !hasBE)  missing = '休憩アウト'
+        else if (!hasBS && hasBE)  missing = '休憩イン'
+        if (missing) {
+            const d = new Date(date)
+            issues.push(`${d.getMonth()+1}月${d.getDate()}日(${DOW_J[d.getDay()]}) ${missing}し忘れ！`)
+        }
+    }
+    if (issues.length) {
+        warnEl.style.display = 'block'
+        warnEl.innerHTML = `<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:12px;padding:12px 14px;margin-bottom:14px;color:#dc2626;font-weight:800;font-size:15px;line-height:1.8">
+            ⚠️ 打刻もれの可能性！<br>${issues.map(i => `・${i}`).join('<br>')}
+            <div style="font-size:12px;font-weight:600;color:#991b1b;margin-top:8px">確認後、⏰打刻時間修正申請をしてください。</div>
+        </div>`
+    }
 }
 
 async function rec(type) {
@@ -790,35 +830,41 @@ function toHHMMFn(mins) {
     return `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`
 }
 
-function calcMinsFn(records) {
+function calcMinsFn(records, shiftType = '') {
+    const isHarunatsu = shiftType === '春夏'
     let ci = null, bs = null, brk = 0, result = 0
     const sorted = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     for (const r of sorted) {
         const t = new Date(r.timestamp)
         if (r.type === 'clock_in') {
-            const cap = new Date(t); cap.setHours(9, 0, 0, 0)
+            const cap = new Date(t); cap.setHours(isHarunatsu ? 8 : 9, isHarunatsu ? 30 : 0, 0, 0)
             ci = t < cap ? cap : t
         } else if (r.type === 'break_start') {
             bs = t
         } else if (r.type === 'break_end' && bs) {
             brk += (t - bs) / 60000; bs = null
         } else if (r.type === 'clock_out' && ci) {
-            result = (t - ci) / 60000 - brk
+            result = (t - ci) / 60000 - (isHarunatsu ? 0 : brk)
         }
     }
-    const hasCO = records.some(r => r.type === 'clock_out')
-    if (hasCO && ci) {
-        const elapsed = result + brk
-        if (elapsed >= 420 && brk < 60) result = elapsed - 60
+    // 春夏以外は7時間以上で最低60分の休憩を保証（春夏は休憩を引かない）
+    if (!isHarunatsu) {
+        const hasCO = records.some(r => r.type === 'clock_out')
+        if (hasCO && ci) {
+            const elapsed = result + brk
+            if (elapsed >= 420 && brk < 60) result = elapsed - 60
+        }
     }
     return Math.max(0, Math.floor(result))
 }
 
-function calcOvertimeFn(records) {
+function calcOvertimeFn(records, shiftType = '') {
     const co = [...records].reverse().find(r => r.type === 'clock_out')
     if (!co) return 0
     const coTime = new Date(co.timestamp)
-    const base = new Date(coTime); base.setHours(18, 0, 0, 0)
+    const base = new Date(coTime)
+    if (shiftType === '春夏') base.setHours(16, 30, 0, 0)
+    else                     base.setHours(18, 0, 0, 0)
     return coTime > base ? Math.floor((coTime - base) / 60000) : 0
 }
 
@@ -852,12 +898,14 @@ async function loadPersonalRecord() {
     document.getElementById('personal-month-label').textContent = `${year}年${parseInt(mon)}月`
     document.getElementById('personal-tbl').innerHTML = '<div class="loading">読み込み中… 🌸</div>'
 
-    const [{ data: attData }, { data: reqData }] = await Promise.all([
+    const [{ data: attData }, { data: reqData }, { data: shiftData }] = await Promise.all([
         db.from('attendance').select('*').eq('employee_id', personalEmpId)
             .gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', personalEmpId)
             .gte('date', from).lte('date', to).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用'])
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用']),
+        db.from('shifts').select('date, shift_type').eq('employee_id', personalEmpId)
+            .gte('date', from).lte('date', to)
     ])
 
     const byDate = {}
@@ -871,6 +919,8 @@ async function loadPersonalRecord() {
         else if (r.requested_type === '自車使用') carRecords.push(r)
         else leaveByDate[r.date] = r
     }
+    const shiftByDate = {}
+    for (const s of shiftData || []) if (s.shift_type) shiftByDate[s.date] = s.shift_type
 
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
     const DOW = ['日','月','火','水','木','金','土']
@@ -891,12 +941,13 @@ async function loadPersonalRecord() {
             : ''
         const leaveMins = calcLeaveMinsFn(leave)
         const nakMins   = calcNakMinsFn(nakByDate[ds])
-        const worked    = calcMinsFn(recs)
+        const shiftType = shiftByDate[ds] || ''
+        const worked    = calcMinsFn(recs, shiftType)
         // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
         const fullDayLeave = leave && ['有給','研修'].includes(leave.requested_type)
         const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
         const dayTotal  = worked + effLeaveMins - nakMins
-        const ot        = calcOvertimeFn(recs)
+        const ot        = calcOvertimeFn(recs, shiftType)
         if (!ci && !co && !leaveLabel) continue
         totalMins += dayTotal; totalOt += ot
         const weekend = dow === 0 || dow === 6
