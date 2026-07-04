@@ -465,8 +465,8 @@ const SHIFT_HOURS = {
     '日勤':8, '午前':4.5, '午後':4, '変則':7, '春夏':8,
     '有給':8, 'AM有休':8, 'PM有休':8, '時間有給':8, '研修':8, '休':0
 }
-// 個人別の勤務時間上書き（2026年7月〜 川平: 午後 14:00〜17:45 = 3.75h。藤井は 14:00〜18:00 = 4h で標準どおり）
-const PERSON_SHIFT_HOURS = { '川平': { '午後': 3.75 } }
+// 個人別の勤務時間上書き（川平: 午後 14:00〜17:30 = 3.5h。藤井は 14:00〜18:00 = 4h で標準どおり）
+const PERSON_SHIFT_HOURS = { '川平': { '午後': 3.5 } }
 function shiftHoursFor(name, st) {
     for (const k in PERSON_SHIFT_HOURS)
         if (name && name.includes(k) && PERSON_SHIFT_HOURS[k][st] != null) return PERSON_SHIFT_HOURS[k][st]
@@ -932,7 +932,7 @@ async function loadShiftsMonthly() {
         hdr += `<th style="background:#fce7f3;min-width:58px;text-align:center;font-size:11px;padding:3px 4px;color:#9d174d;font-weight:700">実勤務<br><span style="font-size:9px">有休除</span></th>`
     }
 
-    const LEGEND = `【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:45）　5.春夏勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
+    const LEGEND = `【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:30）　5.春夏勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
     const today = new Date().toLocaleDateString('sv-SE')
 
     const TARGET_NAMES = TARGET_NAMES_CHECK  // 上部で定義済み
@@ -1204,8 +1204,8 @@ const EMP_TYPE = {
 }
 const AUDIT_DEFAULT = {
     '舘石':'日勤','大野':'日勤','梅内':'日勤','小澤':'日勤','中野':'日勤',
-    '池内':'午前','坂上':'午前','藤沢':'午前','名取':'午前',
-    '川平':'午後','藤井':'午後',
+    '坂上':'午前','藤沢':'午前','名取':'午前',
+    '池内':'午後','川平':'午後','藤井':'午後',
 }
 const AUDIT_KENNIN = ['坂上','池内']  // 計画相談兼任（日勤多すぎチェック対象）
 const AUDIT_SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','休']
@@ -1214,7 +1214,7 @@ const AUDIT_ROSTER = [
     { keys: ['梅内','小野','坂上','藤井','小澤','中野'],        dividerAfter: '藤井' },
     { keys: ['越原','舘石','池内','川平','大野','名取','藤沢'], dividerAfter: '川平' },
 ]
-const AUDIT_LEGEND = '【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:45）　5.春夏勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）'
+const AUDIT_LEGEND = '【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:30）　5.春夏勤務 8:30〜16:30　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）'
 
 function empTypeOf(name)     { for (const k in EMP_TYPE) if (name.includes(k)) return EMP_TYPE[k]; return '常勤' }
 function auditDefaultOf(name){ for (const k in AUDIT_DEFAULT) if (name.includes(k)) return AUDIT_DEFAULT[k]; return '日勤' }
@@ -1333,7 +1333,7 @@ async function loadAuditShifts() {
     hdr += `<th style="background:#eef2ff;min-width:62px;text-align:center;font-size:11px;padding:3px 4px">月勤務<br>常勤換算</th>`
     hdr += `<th style="background:#f0f9ff;min-width:62px;text-align:center;font-size:11px;padding:3px 4px;color:#0369a1">実績累計<br><span style="font-size:9px">打刻・残業除く</span></th>`
 
-    // ===== 池内 FTE自動最適化（午前を最大化し、2.0常勤に届く分だけ日勤を配置） =====
+    // ===== 池内 FTE自動最適化（午後=現場半日を最大化し、2.0常勤に届く分だけ日勤を配置） =====
     const ikeuchiNikkinDays = new Set()
     const ikeuchi = empByName('池内')
     if (ikeuchi && nonRegReq > 0) {
@@ -1350,22 +1350,23 @@ async function loadAuditShifts() {
             const o = empByName(nm); if (!o) continue
             for (const { dow, ds } of days) othersHours += auditHours(auditStOf(o, dow, ds), true, o.name)
         }
-        // 2. 池内の「午前/日勤を割り当てられる日」と固定分（手動・休・有休・春夏）
+        // 2. 池内の「現場半日/日勤を割り当てられる日」と固定分（手動・休・有休・春夏）
+        const ikeuchiBaseShift = auditDefaultOf(ikeuchi.name)                 // 午後
+        const ikeuchiBaseH     = auditHours(ikeuchiBaseShift, true, ikeuchi.name)  // 午後=4h
         const autoDays = []
         let ikeuchiFixed = 0
         for (const { dow, ds } of days) {
             const k = `${ikeuchi.id}_${ds}`
             if (auditMap[k] !== undefined) { ikeuchiFixed += auditHours(auditMap[k], true, ikeuchi.name); continue }
             const p = planShiftOf(ikeuchi, dow, ds, overrideMap)
-            if (p !== '日勤' && p !== '午前') { ikeuchiFixed += auditHours(p, true, ikeuchi.name); continue } // 休・有給・春夏など固定
+            if (!['日勤','午前','午後'].includes(p)) { ikeuchiFixed += auditHours(p, true, ikeuchi.name); continue } // 休・有給・春夏など固定
             autoDays.push(ds)
         }
-        // 3. 目標に必要な日勤日数（午前最大化＝日勤最小）
+        // 3. 目標に必要な日勤日数（現場半日を最大化＝日勤最小）
         const target   = nonRegReq * reqFTE
-        const gozenH   = SHIFT_HOURS['午前'] || 4.5
-        const base     = othersHours + ikeuchiFixed + autoDays.length * gozenH
+        const base     = othersHours + ikeuchiFixed + autoDays.length * ikeuchiBaseH
         const deficit  = target - base
-        const perNik   = (SHIFT_HOURS['日勤'] || 8) - gozenH
+        const perNik   = (SHIFT_HOURS['日勤'] || 8) - ikeuchiBaseH
         let numNik     = deficit > 0 ? Math.ceil(deficit / perNik) : 0
         numNik = Math.min(numNik, autoDays.length)
         // 4. 日勤日を月内に均等分散
@@ -1385,7 +1386,7 @@ async function loadAuditShifts() {
         const isNonReg = etype === '非常勤', isReg = etype === '常勤', isJihatsu = etype === '児発管'
         const tColor = isNonReg ? '#b45309' : isReg ? '#15803d' : '#6b7280'
         let cells = `<td style="position:sticky;left:0;background:white;z-index:1;padding:4px 8px;font-size:13px;font-weight:600;white-space:nowrap">${emp.name}<br><span style="font-size:9px;color:${tColor}">${etype}</span></td>`
-        let empHours = 0, gozen = 0, nikkin = 0
+        let empHours = 0, halfDay = 0, nikkin = 0
         for (const { dow, ds } of days) {
             const key = `${emp.id}_${ds}`
             // 予定シフトをベースに自動下書き（有休・休み・春夏・変則などはそのまま反映）
@@ -1398,14 +1399,14 @@ async function loadAuditShifts() {
                     const fOff = fuj ? AUDIT_LEAVE_SPECIAL.includes(planShiftOf(fuj, dow, ds, overrideMap)) : false
                     draft = fOff ? '日勤' : '午前'  // 藤井が休み→日勤、それ以外→午前
                 } else if (emp.name.includes('池内')) {
-                    draft = ikeuchiNikkinDays.has(ds) ? '日勤' : '午前'  // FTE自動最適化で割当（午前=計画相談を最大化）
+                    draft = ikeuchiNikkinDays.has(ds) ? '日勤' : '午後'  // FTE自動最適化で割当（午後=現場半日を最大化）
                 }
             }
             const st = auditMap[key] !== undefined ? auditMap[key] : draft
             const isOv = auditMap[key] !== undefined
             const bg = SHIFT_COLORS[st] || '#fff'
             if (!isJihatsu) empHours += auditHours(st, isNonReg, emp.name)
-            if (st === '午前') gozen++
+            if (st === '午前' || st === '午後') halfDay++
             if (st === '日勤') nikkin++
             // 実績照合：過去日に「監査=勤務」なのに 有休あり or 打刻なし → 要確認（赤枠）
             let conflict = false
@@ -1421,7 +1422,7 @@ async function loadAuditShifts() {
         const fte = empHours / reqFTE
         if (isReg) regulars.push({ name: emp.name, fte })
         if (isNonReg && isGroupMember(emp.name)) { nonRegs.push({ name: emp.name, fte }); nonRegHours += empHours }
-        if (isAuditKennin(emp.name)) kenninStat[emp.name] = { gozen, nikkin }
+        if (isAuditKennin(emp.name)) kenninStat[emp.name] = { halfDay, nikkin }
         const fteCell = isJihatsu ? '<span style="color:#9ca3af">対象外</span>' : `${empHours.toFixed(1)}h<br><b>${fte.toFixed(2)}</b>`
         cells += `<td style="background:#eef2ff;text-align:center;font-size:11px;padding:3px 4px">${fteCell}</td>`
         // 実績累計（当日まで・打刻ベース・残業除く・中抜け控除）
@@ -1484,9 +1485,9 @@ async function loadAuditShifts() {
     if (kNames.length) {
         let kChips = ''
         for (const n of kNames) {
-            const { gozen, nikkin } = kenninStat[n]
-            const warn = nikkin > gozen
-            kChips += `<div style="border:1.5px solid ${warn?'#fca5a5':'#bfdbfe'};border-radius:8px;padding:5px 10px;background:${warn?'#fef2f2':'#eff6ff'};font-size:12px"><b>${n}</b>（兼任）午前${gozen}日 / 日勤${nikkin}日 ${warn?'⚠️ 日勤が多め':'✅'}</div>`
+            const { halfDay, nikkin } = kenninStat[n]
+            const warn = nikkin > halfDay
+            kChips += `<div style="border:1.5px solid ${warn?'#fca5a5':'#bfdbfe'};border-radius:8px;padding:5px 10px;background:${warn?'#fef2f2':'#eff6ff'};font-size:12px"><b>${n}</b>（兼任）半日勤務${halfDay}日 / 日勤${nikkin}日 ${warn?'⚠️ 日勤が多め':'✅'}</div>`
         }
         panel += `<div style="margin-top:10px"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">日勤チェック</div><div style="display:flex;flex-wrap:wrap;gap:6px">${kChips}</div></div>`
     }
