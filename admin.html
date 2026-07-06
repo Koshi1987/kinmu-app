@@ -295,6 +295,10 @@
                         <input type="checkbox" id="audit-border-cb" checked onchange="auditShowBorder=this.checked; loadAuditShifts()" style="cursor:pointer">
                         🔵 手動設定の青枠を表示
                     </label>
+                    <label style="display:flex;align-items:center;gap:5px;font-size:13px;color:#374151;cursor:pointer;background:#f3f4f6;padding:7px 12px;border-radius:10px">
+                        <input type="checkbox" id="audit-kennin-cb" checked onchange="auditShowKennin=this.checked; loadAuditShifts()" style="cursor:pointer">
+                        📋 日勤チェックを表示
+                    </label>
                 </div>
             </div>
             <div class="print-note" id="pn-audit"></div>
@@ -1197,6 +1201,7 @@ function changeShiftMonth(d) { shiftMonthOffset += d; loadShiftsMonthly() }
 // ===== 監査用シフト表 =====
 let auditMonthOffset = 0
 let auditShowBorder = true  // 手動設定セルの青枠を表示するか
+let auditShowKennin = true   // 日勤チェック（兼任者）を表示するか
 const EMP_TYPE = {
     '越原':'児発管','小野':'児発管',
     '舘石':'常勤','大野':'常勤','梅内':'常勤','小澤':'常勤','中野':'常勤',
@@ -1482,7 +1487,7 @@ async function loadAuditShifts() {
     }
     // 日勤多すぎアラート（兼任者）
     const kNames = Object.keys(kenninStat)
-    if (kNames.length) {
+    if (kNames.length && auditShowKennin) {
         let kChips = ''
         for (const n of kNames) {
             const { halfDay, nikkin } = kenninStat[n]
