@@ -477,6 +477,18 @@ function shiftHoursFor(name, st) {
     return SHIFT_HOURS[st] || 0
 }
 
+// 個人別の勤務時間ルール（開始キャップ・残業起算時刻）。川平・藤井は14:00開始、川平は17:30から残業
+const PERSON_TIME = {
+    '川平': { capH: 14, capM: 0, otH: 17, otM: 30 },
+    '藤井': { capH: 14, capM: 0, otH: 18, otM: 0 },
+}
+// その日の勤務時間ルールを返す（春夏＞個人別＞標準）
+function workTimeRule(shiftType, name) {
+    if (shiftType === '春夏') return { capH: 8, capM: 30, otH: 16, otM: 30 }
+    for (const k in PERSON_TIME) if (name && name.includes(k)) return PERSON_TIME[k]
+    return { capH: 9, capM: 0, otH: 18, otM: 0 }  // 標準：9:00開始・18:00残業
+}
+
 // 国民の祝日（2025〜2026年）
 const HOLIDAYS = new Set([
     // 2025年
@@ -618,7 +630,7 @@ async function loadToday() {
             const ci = recs.find(r => r.type === 'clock_in')
             const co = [...recs].reverse().find(r => r.type === 'clock_out')
             const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'})
-            const mins = calcMins(recs)
+            const mins = calcMins(recs, shiftMap[emp.id] || emp.default_shift || '', emp.name)
 
             const empShift = shiftMap[emp.id] || emp.default_shift || ''
             const biko = LEAVE_TYPES.includes(empShift)
@@ -737,8 +749,8 @@ async function loadRecords() {
             // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
             const fullDayLeave = leaveMap[emp.id] && ['有給','研修'].includes(leaveMap[emp.id].requested_type)
             const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
-            const totalMins = calcMins(recs, shiftType) + effLeaveMins - nakMins
-            const ot = calcOvertime(recs, shiftType)
+            const totalMins = calcMins(recs, shiftType, emp.name) + effLeaveMins - nakMins
+            const ot = calcOvertime(recs, shiftType, emp.name)
             if (!ci && !co && !leaveLabel && !nakLabel) continue
             const leaveBadge = leaveLabel
                 ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>`
@@ -1006,7 +1018,7 @@ async function loadShiftsMonthly() {
                     const hasCO = recs.some(r => r.type === 'clock_out')
                     if (hasCO && ds <= today) {
                         // 実績あり → タイムカードから計算（中抜け差し引き）
-                        const { regular, overtime } = calcActualDayHours(recs, nakMap[key] || 0, st)
+                        const { regular, overtime } = calcActualDayHours(recs, nakMap[key] || 0, st, emp.name)
                         const leaveH = leaveHrsMap[key] || 0  // AM有休・PM有休・時間有給の分を加算
                         totalHours         += regular + overtime + leaveH
                         totalHoursExcLeave += regular + overtime  // 有休分は含めない
@@ -1079,16 +1091,17 @@ async function loadShiftsMonthly() {
 }
 
 // 1日の実績時間を計算（正規時間・残業時間を返す）
-function calcActualDayHours(recs, nakamukeMins = 0, shiftType = '') {
+function calcActualDayHours(recs, nakamukeMins = 0, shiftType = '', name = '') {
     const isHarunatsu = shiftType === '春夏'
+    const rule = workTimeRule(shiftType, name)  // 開始キャップ・残業起算（川平:14:00開始/17:30残業、藤井:14:00開始/18:00残業）
     const sorted = [...recs].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     const ci = sorted.find(r => r.type === 'clock_in')
     const co = [...sorted].reverse().find(r => r.type === 'clock_out')
     if (!ci || !co) return { regular: 0, overtime: 0 }
-    // 春夏は8:30、それ以外は9:00より早い打刻をカット
+    // 開始時刻より早い打刻はカット
     const rawStart = new Date(ci.timestamp)
     const cap = new Date(rawStart)
-    cap.setHours(isHarunatsu ? 8 : 9, isHarunatsu ? 30 : 0, 0, 0)
+    cap.setHours(rule.capH, rule.capM, 0, 0)
     const start = rawStart < cap ? cap : rawStart
     const end   = new Date(co.timestamp)
     // 休憩時間
@@ -1102,11 +1115,10 @@ function calcActualDayHours(recs, nakamukeMins = 0, shiftType = '') {
     const minBreak  = (!isHarunatsu && elapsedMin >= 420) ? 60 : 0
     const effBrkMin = isHarunatsu ? 0 : Math.max(minBreak, actualBrkMin)
     const totalMin  = elapsedMin - effBrkMin
-    // 残業の基準：春夏は16:30、それ以外は18:00以降
-    const base18 = new Date(end)
-    if (isHarunatsu) base18.setHours(16, 30, 0, 0)
-    else             base18.setHours(18, 0, 0, 0)
-    const otMin  = end > base18 ? (end - base18) / 60000 : 0
+    // 残業の起算時刻
+    const otBase = new Date(end)
+    otBase.setHours(rule.otH, rule.otM, 0, 0)
+    const otMin  = end > otBase ? (end - otBase) / 60000 : 0
     const regMin = Math.max(0, totalMin - otMin)
     return { regular: regMin / 60, overtime: otMin / 60 }
 }
@@ -1437,7 +1449,7 @@ async function loadAuditShifts() {
             const recs = attByKey[`${emp.id}_${ds}`]
             if (!recs) continue
             const p = planShiftOf(emp, dow, ds, overrideMap)
-            const { regular } = calcActualDayHours(recs, nakMinsByKey[`${emp.id}_${ds}`] || 0, p)
+            const { regular } = calcActualDayHours(recs, nakMinsByKey[`${emp.id}_${ds}`] || 0, p, emp.name)
             actualCum += regular
         }
         if (isNonReg && isGroupMember(emp.name)) nonRegActual += actualCum
@@ -2243,12 +2255,12 @@ async function loadMonthly() {
         const { label: leaveLabel, mins: leaveMins }  = calcLeave(leaveByDate[ds])
         const { label: nakLabel,  mins: nakMins }     = calcNakamuke(nakamByDate[ds])
         const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
-        const workedMins = calcMins(recs, shiftType)
+        const workedMins = calcMins(recs, shiftType, emp.name)
         // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
         const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
         const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
         const dayTotal = workedMins + effLeaveMins - nakMins
-        const ot = calcOvertime(recs, shiftType)
+        const ot = calcOvertime(recs, shiftType, emp.name)
         totalMins += dayTotal
         totalOt += ot
         if (!ci && !co && !leaveLabel && !nakLabel) continue
@@ -2322,11 +2334,11 @@ async function buildEmpMonthlyHTML(emp, month) {
         const { label: leaveLabel, mins: leaveMins } = calcLeave(leaveByDate[ds])
         const { label: nakLabel,  mins: nakMins }    = calcNakamuke(nakamByDate[ds])
         const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
-        const workedMins = calcMins(recs, shiftType)
+        const workedMins = calcMins(recs, shiftType, emp.name)
         const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
         const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
         const dayTotal = workedMins + effLeaveMins - nakMins
-        const ot = calcOvertime(recs, shiftType)
+        const ot = calcOvertime(recs, shiftType, emp.name)
         totalMins += dayTotal; totalOt += ot
         if (!ci && !co && !leaveLabel && !nakLabel) continue
         const weekend = dateObj.getDay() === 0 || dateObj.getDay() === 6
@@ -2465,15 +2477,16 @@ function calcNakamuke(req) {
     } catch(e) { return { label: '中抜け', mins: 0 } }
 }
 
-function calcMins(records, shiftType = '') {
+function calcMins(records, shiftType = '', name = '') {
     const isHarunatsu = shiftType === '春夏'
+    const rule = workTimeRule(shiftType, name)  // 開始キャップ（川平・藤井は14:00）
     let ci = null, bs = null, brk = 0, result = 0
     const sorted = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     for (const r of sorted) {
         const t = new Date(r.timestamp)
         if (r.type === 'clock_in') {
             const cap = new Date(t)
-            cap.setHours(isHarunatsu ? 8 : 9, isHarunatsu ? 30 : 0, 0, 0)
+            cap.setHours(rule.capH, rule.capM, 0, 0)
             ci = t < cap ? cap : t
         }
         else if (r.type === 'break_start')             bs = t
@@ -2496,17 +2509,14 @@ function toHHMM(mins) {
     return `${Math.floor(mins/60)}:${String(mins%60).padStart(2,'0')}`
 }
 
-// 残業時間（分）を計算（春夏は16:30、それ以外は18:00以降）
-function calcOvertime(records, shiftType = '') {
+// 残業時間（分）を計算（春夏16:30／川平17:30／藤井・標準18:00 以降）
+function calcOvertime(records, shiftType = '', name = '') {
     const co = [...records].reverse().find(r => r.type === 'clock_out')
     if (!co) return 0
     const coTime = new Date(co.timestamp)
+    const rule = workTimeRule(shiftType, name)
     const base = new Date(coTime)
-    if (shiftType === '春夏') {
-        base.setHours(16, 30, 0, 0)
-    } else {
-        base.setHours(18, 0, 0, 0)
-    }
+    base.setHours(rule.otH, rule.otM, 0, 0)
     return coTime > base ? Math.floor((coTime - base) / 60000) : 0
 }
 

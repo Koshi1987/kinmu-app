@@ -830,14 +830,26 @@ function toHHMMFn(mins) {
     return `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`
 }
 
-function calcMinsFn(records, shiftType = '') {
+// 個人別の勤務時間ルール（開始キャップ・残業起算）。川平・藤井は14:00開始、川平は17:30から残業
+const PERSON_TIME = {
+    '川平': { capH: 14, capM: 0, otH: 17, otM: 30 },
+    '藤井': { capH: 14, capM: 0, otH: 18, otM: 0 },
+}
+function workTimeRule(shiftType, name) {
+    if (shiftType === '春夏') return { capH: 8, capM: 30, otH: 16, otM: 30 }
+    for (const k in PERSON_TIME) if (name && name.includes(k)) return PERSON_TIME[k]
+    return { capH: 9, capM: 0, otH: 18, otM: 0 }
+}
+
+function calcMinsFn(records, shiftType = '', name = '') {
     const isHarunatsu = shiftType === '春夏'
+    const rule = workTimeRule(shiftType, name)
     let ci = null, bs = null, brk = 0, result = 0
     const sorted = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
     for (const r of sorted) {
         const t = new Date(r.timestamp)
         if (r.type === 'clock_in') {
-            const cap = new Date(t); cap.setHours(isHarunatsu ? 8 : 9, isHarunatsu ? 30 : 0, 0, 0)
+            const cap = new Date(t); cap.setHours(rule.capH, rule.capM, 0, 0)
             ci = t < cap ? cap : t
         } else if (r.type === 'break_start') {
             bs = t
@@ -858,13 +870,13 @@ function calcMinsFn(records, shiftType = '') {
     return Math.max(0, Math.floor(result))
 }
 
-function calcOvertimeFn(records, shiftType = '') {
+function calcOvertimeFn(records, shiftType = '', name = '') {
     const co = [...records].reverse().find(r => r.type === 'clock_out')
     if (!co) return 0
     const coTime = new Date(co.timestamp)
+    const rule = workTimeRule(shiftType, name)
     const base = new Date(coTime)
-    if (shiftType === '春夏') base.setHours(16, 30, 0, 0)
-    else                     base.setHours(18, 0, 0, 0)
+    base.setHours(rule.otH, rule.otM, 0, 0)
     return coTime > base ? Math.floor((coTime - base) / 60000) : 0
 }
 
@@ -942,12 +954,12 @@ async function loadPersonalRecord() {
         const leaveMins = calcLeaveMinsFn(leave)
         const nakMins   = calcNakMinsFn(nakByDate[ds])
         const shiftType = shiftByDate[ds] || ''
-        const worked    = calcMinsFn(recs, shiftType)
+        const worked    = calcMinsFn(recs, shiftType, personalEmpName)
         // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
         const fullDayLeave = leave && ['有給','研修'].includes(leave.requested_type)
         const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
         const dayTotal  = worked + effLeaveMins - nakMins
-        const ot        = calcOvertimeFn(recs, shiftType)
+        const ot        = calcOvertimeFn(recs, shiftType, personalEmpName)
         if (!ci && !co && !leaveLabel) continue
         totalMins += dayTotal; totalOt += ot
         const weekend = dow === 0 || dow === 6
