@@ -747,9 +747,11 @@ async function loadRecords() {
             const { label: nakLabel,  mins: nakMins }      = calcNakamuke(nakamMap[emp.id])
             const shiftType = shiftTypeMap[emp.id] || emp.default_shift || '日勤'
             // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
+            const workedMins = calcMins(recs, shiftType, emp.name)
             const fullDayLeave = leaveMap[emp.id] && ['有給','研修'].includes(leaveMap[emp.id].requested_type)
-            const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
-            const totalMins = calcMins(recs, shiftType, emp.name) + effLeaveMins - nakMins
+            // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで。超える分は加算しない
+            const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - workedMins))
+            const totalMins = workedMins + effLeaveMins - nakMins
             const ot = calcOvertime(recs, shiftType, emp.name)
             if (!ci && !co && !leaveLabel && !nakLabel) continue
             const leaveBadge = leaveLabel
@@ -1019,7 +1021,8 @@ async function loadShiftsMonthly() {
                     if (hasCO && ds <= today) {
                         // 実績あり → タイムカードから計算（中抜け差し引き）
                         const { regular, overtime } = calcActualDayHours(recs, nakMap[key] || 0, st, emp.name)
-                        const leaveH = leaveHrsMap[key] || 0  // AM有休・PM有休・時間有給の分を加算
+                        // AM有休・PM有休・時間有給は「実働＋有休 ≦ 8h」まで。超える分は加算しない
+                        const leaveH = Math.min(leaveHrsMap[key] || 0, Math.max(0, 8 - regular))
                         totalHours         += regular + overtime + leaveH
                         totalHoursExcLeave += regular + overtime  // 有休分は含めない
                         totalOT            += overtime
@@ -2258,7 +2261,8 @@ async function loadMonthly() {
         const workedMins = calcMins(recs, shiftType, emp.name)
         // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
         const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
-        const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
+        // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで。超える分は加算しない
+        const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - workedMins))
         const dayTotal = workedMins + effLeaveMins - nakMins
         const ot = calcOvertime(recs, shiftType, emp.name)
         totalMins += dayTotal
@@ -2336,7 +2340,8 @@ async function buildEmpMonthlyHTML(emp, month) {
         const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
         const workedMins = calcMins(recs, shiftType, emp.name)
         const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
-        const effLeaveMins = (ci && fullDayLeave) ? 0 : leaveMins
+        // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで。超える分は加算しない
+        const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - workedMins))
         const dayTotal = workedMins + effLeaveMins - nakMins
         const ot = calcOvertime(recs, shiftType, emp.name)
         totalMins += dayTotal; totalOt += ot
