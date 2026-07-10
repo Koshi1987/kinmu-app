@@ -164,11 +164,13 @@
             /* 全員分まとめて印刷：コンテナのみ表示 */
             body.printing-all > *:not(#print-all-container) { display: none !important; }
             body.printing-all #print-all-container { display: block !important; }
-            #print-all-container table { width: 100%; border-collapse: collapse; font-size: 10pt; }
-            #print-all-container th, #print-all-container td { padding: 3px 6px; border-bottom: 1px solid #ddd; text-align: left; }
         }
 
+        /* まとめて印刷のスタイルは常時適用（画面外での高さ計測と印刷結果を一致させるため） */
         #print-all-container { display: none; }
+        #print-all-container table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+        #print-all-container th, #print-all-container td { padding: 3px 6px; border-bottom: 1px solid #ddd; text-align: left; }
+        #print-all-container .emp-section:last-child { border-bottom: none; }
         .hidden { display: none !important; }
     </style>
 </head>
@@ -2354,7 +2356,8 @@ async function buildEmpMonthlyHTML(emp, month) {
     if (!rows) rows = '<tr><td colspan="9" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
     rows += `<tr class="total-row"><td>合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td><td></td><td></td></tr>`
 
-    return `<div style="page-break-after:always;padding:0 0 12px">
+    // page-break-inside:avoid → 1人が2ページに割れない。短い人は自動で同じページに詰まる
+    return `<div class="emp-section" style="page-break-inside:avoid;break-inside:avoid;padding:0 0 10px;margin-bottom:14px;border-bottom:1px dashed #ccc">
         <div style="font-size:16px;font-weight:700;margin-bottom:4px">${emp.name}　月間個人記録</div>
         <div style="font-size:12px;color:#444;margin-bottom:8px">${year}年${mon}月11日 〜 ${nextYear}年${nextMon}月10日</div>
         <table>
@@ -2373,22 +2376,44 @@ async function printAllMonthly() {
     if (!targets.length) return alert('対象の職員がいません')
     const btn = document.getElementById('print-all-btn')
     btn.disabled = true; btn.textContent = '⏳ 準備中…'
+    const container = document.getElementById('print-all-container')
     try {
         const sections = []
         for (const emp of targets) sections.push(await buildEmpMonthlyHTML(emp, month))
-        document.getElementById('print-all-container').innerHTML = sections.join('')
+        container.innerHTML = sections.join('')
     } catch(e) {
         alert('エラー: ' + e.message); btn.disabled = false; btn.textContent = '🖨 全員分まとめて印刷（所長除く）'; return
     }
+    fitSectionsToPage(container)  // 1ページに収まらない人だけ自動縮小
     btn.disabled = false; btn.textContent = '🖨 全員分まとめて印刷（所長除く）'
     document.body.classList.add('printing-all')
     const cleanup = () => {
         document.body.classList.remove('printing-all')
-        document.getElementById('print-all-container').innerHTML = ''
+        container.innerHTML = ''
+        container.removeAttribute('style')
         window.removeEventListener('afterprint', cleanup)
     }
     window.addEventListener('afterprint', cleanup)
     window.print()
+}
+
+// A4縦1ページに収まらない職員ブロックだけ自動縮小（自車使用が多い坂上・池内など）
+function fitSectionsToPage(container) {
+    // A4縦・余白10mm の印刷可能領域を px で測る
+    const probe = document.createElement('div')
+    probe.style.cssText = 'position:absolute;visibility:hidden;width:190mm;height:277mm;'
+    document.body.appendChild(probe)
+    const pageW = probe.offsetWidth, pageH = probe.offsetHeight
+    probe.remove()
+
+    // 計測のため、印刷幅で画面外に一時表示
+    container.style.cssText = `display:block;position:absolute;left:-10000px;top:0;width:${pageW}px;`
+    for (const sec of container.querySelectorAll('.emp-section')) {
+        sec.style.zoom = ''
+        const h = sec.offsetHeight
+        if (h > pageH) sec.style.zoom = Math.max(0.5, (pageH - 8) / h)  // 最小50%まで縮小
+    }
+    container.removeAttribute('style')  // CSSの display:none に戻す
 }
 
 // 月間個人記録：自車使用記録テーブルを生成
