@@ -830,10 +830,11 @@ function toHHMMFn(mins) {
     return `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`
 }
 
-// 個人別の勤務時間ルール（開始キャップ・残業起算）。川平・藤井は14:00開始、川平は17:30から残業
+// 個人別の勤務時間ルール（開始キャップ・残業起算）。川平・藤井は14:00開始、川平は17:30から残業、輪湖は9:00開始・14:00から残業
 const PERSON_TIME = {
     '川平': { capH: 14, capM: 0, otH: 17, otM: 30 },
     '藤井': { capH: 14, capM: 0, otH: 18, otM: 0 },
+    '輪湖': { capH: 9,  capM: 0, otH: 14, otM: 0 },
 }
 function workTimeRule(shiftType, name) {
     if (shiftType === '春夏') return { capH: 8, capM: 30, otH: 16, otM: 30 }
