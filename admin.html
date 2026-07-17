@@ -491,6 +491,11 @@ function workTimeRule(shiftType, name) {
     for (const k in PERSON_TIME) if (name && name.includes(k)) return PERSON_TIME[k]
     return { capH: 9, capM: 0, otH: 18, otM: 0 }  // 標準：9:00開始・18:00残業
 }
+// 土日祝の判定（打刻があれば「休日出勤」＝全時間を残業扱い）
+function isHolidayDay(ds, dow) {
+    if (dow == null) dow = new Date(ds).getDay()
+    return dow === 0 || dow === 6 || HOLIDAYS.has(ds)
+}
 
 // 国民の祝日（2025〜2026年）
 const HOLIDAYS = new Set([
@@ -714,7 +719,7 @@ async function loadRecords() {
     const [{ data }, { data: reqData }, { data: shiftData }] = await Promise.all([
         db.from('attendance').select('*').eq('date', date).order('timestamp'),
         db.from('shift_requests').select('*').eq('date', date).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け']),
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','代休']),
         db.from('shifts').select('employee_id, shift_type').eq('date', date)
     ])
 
@@ -723,11 +728,13 @@ async function loadRecords() {
         if (!empAtt[r.employee_id]) empAtt[r.employee_id] = []
         empAtt[r.employee_id].push(r)
     }
-    const leaveMap = {}, nakamMap = {}
+    const leaveMap = {}, nakamMap = {}, daikyuMap = {}
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakamMap[r.employee_id] = r
+        else if (r.requested_type === '代休') daikyuMap[r.employee_id] = r
         else leaveMap[r.employee_id] = r
     }
+    const recDow = new Date(date).getDay()
     const shiftTypeMap = {}
     for (const s of shiftData || []) {
         if (s.shift_type) shiftTypeMap[s.employee_id] = s.shift_type
@@ -749,16 +756,23 @@ async function loadRecords() {
             const { label: leaveLabel, mins: leaveMins }   = calcLeave(leaveMap[emp.id])
             const { label: nakLabel,  mins: nakMins }      = calcNakamuke(nakamMap[emp.id])
             const shiftType = shiftTypeMap[emp.id] || emp.default_shift || '日勤'
-            // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
             const workedMins = calcMins(recs, shiftType, emp.name)
+            const holidayWork = isHolidayDay(date, recDow) && !!ci   // 土日祝に打刻＝休日出勤
+            const daikyu = daikyuMap[emp.id]
+            const daikyuMins = daikyu ? (daikyu.requested_hours || 0) * 60 : 0
             const fullDayLeave = leaveMap[emp.id] && ['有給','研修'].includes(leaveMap[emp.id].requested_type)
-            // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで。超える分は加算しない
+            // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで
             const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - workedMins))
-            const totalMins = workedMins + effLeaveMins - nakMins
-            const ot = calcOvertime(recs, shiftType, emp.name)
-            if (!ci && !co && !leaveLabel && !nakLabel) continue
-            const leaveBadge = leaveLabel
-                ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>`
+            // 休日出勤：実働はすべて残業扱い（通常勤務は0）。代休は通常勤務に加算
+            const totalMins = (holidayWork ? 0 : workedMins + effLeaveMins - nakMins) + daikyuMins
+            const ot = holidayWork ? workedMins : calcOvertime(recs, shiftType, emp.name)
+            if (!ci && !co && !leaveLabel && !nakLabel && !daikyu) continue
+            const holidayBadge = holidayWork
+                ? `<span style="background:#dbeafe;color:#1e3a8a;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:700">休日出勤</span>` : ''
+            const daikyuBadge = daikyu
+                ? `<span style="background:#e0f2fe;color:#0369a1;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:700">代休${daikyu.requested_hours}h</span>` : ''
+            const leaveBadge = (leaveLabel || holidayBadge || daikyuBadge)
+                ? `${leaveLabel ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>` : ''}${holidayBadge}${daikyuBadge}`
                 : '-'
             const nakBadge = nakLabel
                 ? `<span style="background:#fed7aa;color:#9a3412;font-size:11px;padding:2px 7px;border-radius:999px;font-weight:600">${nakLabel}</span>`
@@ -895,14 +909,18 @@ async function loadShiftsMonthly() {
     let attMap      = {} // { empId_date: [records...] }
     let nakMap      = {} // { empId_date: nakamukeMins }
     let leaveHrsMap = {} // { empId_date: leave hours（打刻と併用するAM/PM/時間有給） }
+    let daikyuMap   = {} // { empId_date: 代休hours }
     if (teamFilter !== 'all') {
-        const [{ data: attData }, { data: nakData }, { data: leaveData }] = await Promise.all([
+        const [{ data: attData }, { data: nakData }, { data: leaveData }, { data: daikyuData }] = await Promise.all([
             db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp'),
             db.from('shift_requests').select('*').gte('date', from).lte('date', to)
                 .eq('status', 'approved').eq('requested_type', '中抜け'),
             db.from('shift_requests').select('*').gte('date', from).lte('date', to)
-                .eq('status', 'approved').in('requested_type', ['AM有休','PM有休','時間有給'])
+                .eq('status', 'approved').in('requested_type', ['AM有休','PM有休','時間有給']),
+            db.from('shift_requests').select('employee_id,date,requested_hours').gte('date', from).lte('date', to)
+                .eq('status', 'approved').eq('requested_type', '代休')
         ])
+        for (const r of daikyuData || []) daikyuMap[`${r.employee_id}_${r.date}`] = r.requested_hours || 0
         for (const r of attData || []) {
             const k = `${r.employee_id}_${r.date}`
             if (!attMap[k]) attMap[k] = []
@@ -1042,11 +1060,16 @@ async function loadShiftsMonthly() {
                     // ds > today（未来日）→ 何も加算しない（0スタート）
                 }
 
+                // 休日出勤（土日祝に打刻）・代休のラベル表示
+                const holidayWork = (isWknd || isHoliday) && (attMap[key] || []).some(r => r.type === 'clock_in')
+                const isDaikyu    = daikyuMap[key] != null
+                const dispSt = isDaikyu ? '代休' : (holidayWork ? '休日出勤' : st)
+                const cellBg = isDaikyu ? '#e0f2fe' : (holidayWork ? '#dbeafe' : bg)
                 // 長いラベル（AM有休・時間有給など）は文字を縮小＋折り返して見切れ防止
-                const stFont = st.length >= 4 ? 8 : st.length === 3 ? 9 : 11
-                const arrow  = st.length <= 2 ? '<span style="font-size:8px;opacity:0.5">▾</span>' : ''
+                const stFont = dispSt.length >= 4 ? 8 : dispSt.length === 3 ? 9 : 11
+                const arrow  = dispSt.length <= 2 ? '<span style="font-size:8px;opacity:0.5">▾</span>' : ''
                 cells += `<td onclick="showShiftPicker('${emp.id}','${ds}','${st}',this)"
-                    style="background:${bg};text-align:center;font-size:${stFont}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;user-select:none;white-space:normal;word-break:break-word">${st}${arrow}</td>`
+                    style="background:${cellBg};text-align:center;font-size:${stFont}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;user-select:none;white-space:normal;word-break:break-word">${dispSt}${arrow}</td>`
             }
 
             const isTarget = TARGET_NAMES_CHECK.some(n => emp.name.includes(n))
@@ -1296,15 +1319,18 @@ async function loadAuditShifts() {
 
     // 実績照合＋実績累計用：実際の打刻（全件）と承認済み有休・中抜け
     const todayStr2 = new Date().toLocaleDateString('sv-SE')
-    const [{ data: attData }, { data: leaveData }, { data: nakData }] = await Promise.all([
+    const [{ data: attData }, { data: leaveData }, { data: nakData }, { data: daikyuData }] = await Promise.all([
         db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('employee_id,date').eq('status','approved')
             .in('requested_type',['有給','AM有休','PM有休','時間有給','研修']).gte('date', from).lte('date', to),
         db.from('shift_requests').select('employee_id,date,reason').eq('status','approved')
-            .eq('requested_type','中抜け').gte('date', from).lte('date', to)
+            .eq('requested_type','中抜け').gte('date', from).lte('date', to),
+        db.from('shift_requests').select('employee_id,date,requested_hours').eq('status','approved')
+            .eq('requested_type','代休').gte('date', from).lte('date', to)
     ])
     const clockedSet = new Set((attData || []).filter(r => r.type === 'clock_in').map(r => `${r.employee_id}_${r.date}`))
     const leaveSet   = new Set((leaveData || []).map(r => `${r.employee_id}_${r.date}`))
+    const daikyuSet  = new Set((daikyuData || []).map(r => `${r.employee_id}_${r.date}`))
     const attByKey = {}
     for (const r of attData || []) { const k = `${r.employee_id}_${r.date}`; (attByKey[k] = attByKey[k] || []).push(r) }
     const nakMinsByKey = {}
@@ -1437,20 +1463,25 @@ async function loadAuditShifts() {
             }
             const st = auditMap[key] !== undefined ? auditMap[key] : draft
             const isOv = auditMap[key] !== undefined
-            const bg = SHIFT_COLORS[st] || '#fff'
-            empHours += auditHours(st, isNonReg, emp.name)  // 児発管も時間数は集計（換算対象外だが参考表示する）
-            if (st === '午前' || st === '午後') halfDay++
-            if (st === '日勤') nikkin++
-            // 実績照合：過去日に「監査=勤務」なのに 有休あり or 打刻なし → 要確認（赤枠）
+            const isDaikyu  = daikyuSet.has(key)
+            const isHolWork = isHolidayDay(ds, dow) && clockedSet.has(key) && !WORKING_TYPES.includes(st)
+            // 代休の日は配置0h（休扱い）。休日出勤は残業扱いで配置に入れない
+            const effSt  = isDaikyu ? '休' : st
+            const dispSt = isDaikyu ? '代休' : (isHolWork ? '休日出勤' : st)
+            const bg = isDaikyu ? '#e0f2fe' : (isHolWork ? '#dbeafe' : (SHIFT_COLORS[st] || '#fff'))
+            empHours += auditHours(effSt, isNonReg, emp.name)  // 代休は0h。児発管も時間数は集計（換算対象外）
+            if (effSt === '午前' || effSt === '午後') halfDay++
+            if (effSt === '日勤') nikkin++
+            // 実績照合：過去日に「監査=勤務」なのに 有休あり or 打刻なし → 要確認（赤枠）※代休・休日出勤は対象外
             let conflict = false
-            if (!isJihatsu && ds >= AUDIT_START && ds < todayStr2 && WORKING_TYPES.includes(st) && (leaveSet.has(key) || !clockedSet.has(key))) {
+            if (!isJihatsu && !isDaikyu && ds >= AUDIT_START && ds < todayStr2 && WORKING_TYPES.includes(st) && (leaveSet.has(key) || !clockedSet.has(key))) {
                 conflict = true
                 conflicts.push({ name: emp.name, ds, reason: leaveSet.has(key) ? '有休あり' : '打刻なし' })
             }
             const ring = conflict ? 'box-shadow:inset 0 0 0 2px #dc2626;' : (isOv && auditShowBorder ? 'box-shadow:inset 0 0 0 2px #6366f1;' : '')
             const mark = conflict ? '<span style="color:#dc2626;font-weight:800;font-size:10px">!</span>' : ''
-            const f = st.length>=4?8:st.length===3?9:11
-            cells += `<td onclick="showAuditPicker('${emp.id}','${ds}','${st}',this)" title="${conflict?('要確認: 実績と相違（'+(leaveSet.has(key)?'有休あり':'打刻なし')+'）'):''}" style="background:${bg};text-align:center;font-size:${f}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;${ring}user-select:none">${st}${mark}</td>`
+            const f = dispSt.length>=4?8:dispSt.length===3?9:11
+            cells += `<td onclick="showAuditPicker('${emp.id}','${ds}','${st}',this)" title="${conflict?('要確認: 実績と相違（'+(leaveSet.has(key)?'有休あり':'打刻なし')+'）'):''}" style="background:${bg};text-align:center;font-size:${f}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;${ring}user-select:none">${dispSt}${mark}</td>`
         }
         const fte = empHours / reqFTE
         if (isReg) regulars.push({ name: emp.name, fte })
@@ -1831,6 +1862,7 @@ async function loadRequests() {
         for (const r of pending) {
             const isFix      = r.requested_type === '打刻補正'
             const isNakamuke = r.requested_type === '中抜け'
+            const isNoWrite  = isNakamuke || r.requested_type === '代休'  // shiftsに書かず承認のみ
             let fixDetail = '', nakDetail = ''
             let comment = r.reason || ''
             if (isFix && r.reason) {
@@ -1850,11 +1882,11 @@ async function loadRequests() {
                         nakDetail = `<span style="background:#fed7aa;padding:2px 8px;border-radius:4px;margin-right:4px;font-weight:600">🚶 外出 ${d.break_start}　🏃 戻り ${d.break_end}</span>`
                 } catch(e) {}
             }
-            const borderColor = isFix ? '#f97316' : isNakamuke ? '#fb923c' : '#f59e0b'
+            const borderColor = isFix ? '#f97316' : isNoWrite ? '#fb923c' : '#f59e0b'
             const approveBtn  = isFix
                 ? `<button onclick="approveFix('${r.id}')"
                       style="padding:8px 16px;background:#ffedd5;color:#c2410c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認・反映</button>`
-                : isNakamuke
+                : isNoWrite
                 ? `<button onclick="approveNakamuke('${r.id}')"
                       style="padding:8px 16px;background:#ffedd5;color:#c2410c;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✓ 承認</button>`
                 : `<button onclick="approveRequest('${r.id}','${r.employee_id}','${r.date}','${r.requested_type}')"
@@ -1929,7 +1961,7 @@ async function approveRequest(id, empId, date, type) {
 }
 
 async function approveNakamuke(id) {
-    if (!confirm('この中抜け申請を承認しますか？\n（勤務時間から中抜け時間が差し引かれます）')) return
+    if (!confirm('この申請を承認しますか？')) return
     try {
         await db.from('shift_requests').update({ status: 'approved' }).eq('id', id)
         loadRequests()
@@ -2228,7 +2260,7 @@ async function loadMonthly() {
             .gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', empId)
             .gte('date', from).lte('date', to).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用']),
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用','代休']),
         db.from('shifts').select('date, shift_type').eq('employee_id', empId)
             .gte('date', from).lte('date', to)
     ])
@@ -2238,10 +2270,11 @@ async function loadMonthly() {
         if (!byDate[r.date]) byDate[r.date] = []
         byDate[r.date].push(r)
     }
-    const leaveByDate = {}, nakamByDate = {}, carRecords = []
+    const leaveByDate = {}, nakamByDate = {}, daikyuByDate = {}, carRecords = []
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakamByDate[r.date] = r
         else if (r.requested_type === '自車使用') carRecords.push(r)
+        else if (r.requested_type === '代休') daikyuByDate[r.date] = r
         else leaveByDate[r.date] = r
     }
     const shiftByDate = {}
@@ -2250,7 +2283,7 @@ async function loadMonthly() {
     }
 
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
-    let rows = '', totalMins = 0, totalOt = 0
+    let rows = '', totalMins = 0, totalOt = 0, holidayWorkTotal = 0, daikyuTotal = 0
 
     // 日付リスト：選択月11日〜月末、翌月1日〜10日
     const dates = []
@@ -2262,7 +2295,8 @@ async function loadMonthly() {
 
     for (const ds of dates) {
         const dateObj = new Date(ds)
-        const dayName = ['日','月','火','水','木','金','土'][dateObj.getDay()]
+        const dow = dateObj.getDay()
+        const dayName = ['日','月','火','水','木','金','土'][dow]
         const dispMon = dateObj.getMonth() + 1
         const dispDay = dateObj.getDate()
         const recs = (byDate[ds] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
@@ -2274,36 +2308,48 @@ async function loadMonthly() {
         const { label: nakLabel,  mins: nakMins }     = calcNakamuke(nakamByDate[ds])
         const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
         const workedMins = calcMins(recs, shiftType, emp.name)
-        // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
+        const holidayWork = isHolidayDay(ds, dow) && !!ci   // 土日祝に打刻＝休日出勤
+        const daikyu = daikyuByDate[ds]
+        const daikyuMins = daikyu ? (daikyu.requested_hours || 0) * 60 : 0
         const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
-        // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで。超える分は加算しない
         const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - workedMins))
-        const dayTotal = workedMins + effLeaveMins - nakMins
-        const ot = calcOvertime(recs, shiftType, emp.name)
+        // 休日出勤：実働は全て残業扱い（通常勤務0）。代休は通常勤務に加算
+        const dayTotal = (holidayWork ? 0 : workedMins + effLeaveMins - nakMins) + daikyuMins
+        const dayOt = holidayWork ? workedMins : calcOvertime(recs, shiftType, emp.name)
+        if (holidayWork) holidayWorkTotal += workedMins
+        else totalOt += dayOt              // 平日残業は合計に直接
+        daikyuTotal += daikyuMins
         totalMins += dayTotal
-        totalOt += ot
-        if (!ci && !co && !leaveLabel && !nakLabel) continue
-        const weekend = dateObj.getDay() === 0 || dateObj.getDay() === 6
-        const leaveBadge = leaveLabel
-            ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>`
-            : ''
+        if (!ci && !co && !leaveLabel && !nakLabel && !daikyu) continue
+        const weekend = dow === 0 || dow === 6
+        const badges = [
+            leaveLabel ? `<span style="background:#fbcfe8;color:#9d174d;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600">${leaveLabel}</span>` : '',
+            holidayWork ? `<span style="background:#dbeafe;color:#1e3a8a;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:700">休日出勤</span>` : '',
+            daikyu ? `<span style="background:#e0f2fe;color:#0369a1;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:700">代休${daikyu.requested_hours}h</span>` : ''
+        ].join(' ')
         const nakBadge = nakLabel
             ? `<span style="background:#fed7aa;color:#9a3412;font-size:11px;padding:1px 7px;border-radius:999px;font-weight:600">${nakLabel}</span>`
             : ''
-        rows += `<tr ${weekend ? 'style="color:#9ca3af"' : ''}>`
+        rows += `<tr ${weekend && !holidayWork ? 'style="color:#9ca3af"' : ''}>`
         rows += `<td>${dispMon}/${dispDay}（${dayName}）</td>`
         rows += `<td>${ci ? fmt(ci.timestamp) : '-'}</td>`
         rows += `<td>${bs ? fmt(bs.timestamp) : '-'}</td>`
         rows += `<td>${be ? fmt(be.timestamp) : '-'}</td>`
         rows += `<td>${co ? fmt(co.timestamp) : '-'}</td>`
         rows += `<td>${dayTotal > 0 ? toHHMM(dayTotal) : '-'}</td>`
-        rows += `<td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td>`
-        rows += `<td>${leaveBadge}</td>`
+        rows += `<td>${dayOt > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(dayOt)}</span>` : '-'}</td>`
+        rows += `<td>${badges.trim() || ''}</td>`
         rows += `<td>${nakBadge}</td></tr>`
     }
 
+    // 休日出勤の残業は「休日出勤合計 − 代休合計」だけ計上（代休で振り替えた分は残業にしない）
+    const holidayOt = Math.max(0, holidayWorkTotal - daikyuTotal)
+    totalOt += holidayOt
+
     if (!rows) rows = '<tr><td colspan="9" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
-    rows += `<tr class="total-row"><td>合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td><td></td><td></td></tr>`
+    const daikyuNote = (holidayWorkTotal > 0 || daikyuTotal > 0)
+        ? `<tr><td colspan="9" style="font-size:11px;color:#0369a1;background:#f0f9ff;padding:5px 10px">休日出勤 計${toHHMM(holidayWorkTotal)} ／ 代休 計${toHHMM(daikyuTotal)} ／ 残業に計上した休日出勤分 ${toHHMM(holidayOt)}（代休残高 ${toHHMM(Math.max(0,holidayWorkTotal-daikyuTotal))}）</td></tr>` : ''
+    rows += daikyuNote + `<tr class="total-row"><td>合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td><td></td><td></td></tr>`
     document.getElementById('monthly-tbl').innerHTML =
         `<table><thead><tr><th>日付</th><th>出勤</th><th>休憩イン</th><th>休憩アウト</th><th>退勤</th><th>勤務時間</th><th style="color:#b91c1c">残業</th><th style="color:#9d174d">有給</th><th style="color:#9a3412">中抜け</th></tr></thead><tbody>${rows}</tbody></table>`
         + buildMonthlyCarTable(carRecords)
@@ -2321,15 +2367,16 @@ async function buildEmpMonthlyHTML(emp, month) {
     const [{ data }, { data: reqData }, { data: shiftData }] = await Promise.all([
         db.from('attendance').select('*').eq('employee_id', emp.id).gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', emp.id).gte('date', from).lte('date', to)
-            .eq('status', 'approved').in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用']),
+            .eq('status', 'approved').in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用','代休']),
         db.from('shifts').select('date, shift_type').eq('employee_id', emp.id).gte('date', from).lte('date', to)
     ])
     const byDate = {}
     for (const r of data || []) { (byDate[r.date] = byDate[r.date] || []).push(r) }
-    const leaveByDate = {}, nakamByDate = {}, carRecords = []
+    const leaveByDate = {}, nakamByDate = {}, daikyuByDate = {}, carRecords = []
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakamByDate[r.date] = r
         else if (r.requested_type === '自車使用') carRecords.push(r)
+        else if (r.requested_type === '代休') daikyuByDate[r.date] = r
         else leaveByDate[r.date] = r
     }
     const shiftByDate = {}
@@ -2341,10 +2388,11 @@ async function buildEmpMonthlyHTML(emp, month) {
     for (let d = 11; d <= lastDayOfMonth; d++) dates.push(`${month}-${String(d).padStart(2,'0')}`)
     for (let d = 1; d <= 10; d++) dates.push(`${nextYear}-${nextMon}-${String(d).padStart(2,'0')}`)
 
-    let rows = '', totalMins = 0, totalOt = 0
+    let rows = '', totalMins = 0, totalOt = 0, holidayWorkTotal = 0, daikyuTotal = 0
     for (const ds of dates) {
         const dateObj = new Date(ds)
-        const dayName = ['日','月','火','水','木','金','土'][dateObj.getDay()]
+        const dow = dateObj.getDay()
+        const dayName = ['日','月','火','水','木','金','土'][dow]
         const recs = (byDate[ds] || []).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
         const ci = recs.find(r => r.type === 'clock_in')
         const bs = recs.find(r => r.type === 'break_start')
@@ -2354,19 +2402,30 @@ async function buildEmpMonthlyHTML(emp, month) {
         const { label: nakLabel,  mins: nakMins }    = calcNakamuke(nakamByDate[ds])
         const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
         const workedMins = calcMins(recs, shiftType, emp.name)
+        const holidayWork = isHolidayDay(ds, dow) && !!ci
+        const daikyu = daikyuByDate[ds]
+        const daikyuMins = daikyu ? (daikyu.requested_hours || 0) * 60 : 0
         const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
-        // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで。超える分は加算しない
         const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - workedMins))
-        const dayTotal = workedMins + effLeaveMins - nakMins
-        const ot = calcOvertime(recs, shiftType, emp.name)
-        totalMins += dayTotal; totalOt += ot
-        if (!ci && !co && !leaveLabel && !nakLabel) continue
-        const weekend = dateObj.getDay() === 0 || dateObj.getDay() === 6
-        const leaveBadge = leaveLabel ? `<span style="background:#fbcfe8;color:#9d174d;font-size:10px;padding:1px 6px;border-radius:999px;font-weight:600">${leaveLabel}</span>` : ''
+        const dayTotal = (holidayWork ? 0 : workedMins + effLeaveMins - nakMins) + daikyuMins
+        const dayOt = holidayWork ? workedMins : calcOvertime(recs, shiftType, emp.name)
+        if (holidayWork) holidayWorkTotal += workedMins; else totalOt += dayOt
+        daikyuTotal += daikyuMins
+        totalMins += dayTotal
+        if (!ci && !co && !leaveLabel && !nakLabel && !daikyu) continue
+        const weekend = dow === 0 || dow === 6
+        const badges = [
+            leaveLabel ? `<span style="background:#fbcfe8;color:#9d174d;font-size:10px;padding:1px 6px;border-radius:999px;font-weight:600">${leaveLabel}</span>` : '',
+            holidayWork ? `<span style="background:#dbeafe;color:#1e3a8a;font-size:10px;padding:1px 6px;border-radius:999px;font-weight:700">休日出勤</span>` : '',
+            daikyu ? `<span style="background:#e0f2fe;color:#0369a1;font-size:10px;padding:1px 6px;border-radius:999px;font-weight:700">代休${daikyu.requested_hours}h</span>` : ''
+        ].join(' ').trim()
         const nakBadge = nakLabel ? `<span style="background:#fed7aa;color:#9a3412;font-size:10px;padding:1px 6px;border-radius:999px;font-weight:600">${nakLabel}</span>` : ''
-        rows += `<tr ${weekend ? 'style="color:#9ca3af"' : ''}><td>${dateObj.getMonth()+1}/${dateObj.getDate()}（${dayName}）</td><td>${ci ? fmt(ci.timestamp) : '-'}</td><td>${bs ? fmt(bs.timestamp) : '-'}</td><td>${be ? fmt(be.timestamp) : '-'}</td><td>${co ? fmt(co.timestamp) : '-'}</td><td>${dayTotal > 0 ? toHHMM(dayTotal) : '-'}</td><td>${ot > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(ot)}</span>` : '-'}</td><td>${leaveBadge}</td><td>${nakBadge}</td></tr>`
+        rows += `<tr ${weekend && !holidayWork ? 'style="color:#9ca3af"' : ''}><td>${dateObj.getMonth()+1}/${dateObj.getDate()}（${dayName}）</td><td>${ci ? fmt(ci.timestamp) : '-'}</td><td>${bs ? fmt(bs.timestamp) : '-'}</td><td>${be ? fmt(be.timestamp) : '-'}</td><td>${co ? fmt(co.timestamp) : '-'}</td><td>${dayTotal > 0 ? toHHMM(dayTotal) : '-'}</td><td>${dayOt > 0 ? `<span style="color:#b91c1c;font-weight:600">${toHHMM(dayOt)}</span>` : '-'}</td><td>${badges}</td><td>${nakBadge}</td></tr>`
     }
+    totalOt += Math.max(0, holidayWorkTotal - daikyuTotal)  // 休日出勤の残業＝休日出勤−代休
     if (!rows) rows = '<tr><td colspan="9" style="text-align:center;color:#9ca3af">記録がありません</td></tr>'
+    if (holidayWorkTotal > 0 || daikyuTotal > 0)
+        rows += `<tr><td colspan="9" style="font-size:10px;color:#0369a1;background:#f0f9ff;padding:4px 8px">休日出勤 計${toHHMM(holidayWorkTotal)} ／ 代休 計${toHHMM(daikyuTotal)}（代休残高 ${toHHMM(Math.max(0,holidayWorkTotal-daikyuTotal))}）</td></tr>`
     rows += `<tr class="total-row"><td>合計</td><td>-</td><td>-</td><td>-</td><td>-</td><td>${toHHMM(totalMins)}</td><td style="color:#b91c1c">${totalOt > 0 ? toHHMM(totalOt) : '-'}</td><td></td><td></td></tr>`
 
     // page-break-inside:avoid → 1人が2ページに割れない。短い人は自動で同じページに詰まる

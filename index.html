@@ -285,6 +285,7 @@
                 <option value="AM有休">AM有休（午前休）</option>
                 <option value="PM有休">PM有休（午後休）</option>
                 <option value="時間有給">時間有給（1時間〜）</option>
+                <option value="代休">代休（休日出勤の振替）</option>
                 <option value="変則">変則</option>
                 <option value="中抜け">中抜け（外出・減給）</option>
                 <option value="研修">研修</option>
@@ -619,7 +620,7 @@ function goReq() {
 
 function toggleHours() {
     const type = document.getElementById('req-type').value
-    document.getElementById('hours-row').style.display    = type === '時間有給' ? 'block' : 'none'
+    document.getElementById('hours-row').style.display    = (type === '時間有給' || type === '代休') ? 'block' : 'none'
     document.getElementById('nakamuke-row').style.display = type === '中抜け'   ? 'block' : 'none'
 }
 
@@ -699,7 +700,7 @@ async function submitRequest() {
     const date  = document.getElementById('req-date').value
     const type  = document.getElementById('req-type').value
     let reason  = document.getElementById('req-reason').value
-    let hours   = type === '時間有給' ? parseInt(document.getElementById('req-hours').value) : 0
+    let hours   = (type === '時間有給' || type === '代休') ? parseInt(document.getElementById('req-hours').value) : 0
     if (!date) return alert('日付を選択してください')
     if (type === '中抜け') {
         const bs = document.getElementById('nak-start').value
@@ -841,6 +842,10 @@ function workTimeRule(shiftType, name) {
     for (const k in PERSON_TIME) if (name && name.includes(k)) return PERSON_TIME[k]
     return { capH: 9, capM: 0, otH: 18, otM: 0 }
 }
+function isHolidayDay(ds, dow) {
+    if (dow == null) dow = new Date(ds).getDay()
+    return dow === 0 || dow === 6 || HOLIDAYS.has(ds)
+}
 
 function calcMinsFn(records, shiftType = '', name = '') {
     const isHarunatsu = shiftType === '春夏'
@@ -916,7 +921,7 @@ async function loadPersonalRecord() {
             .gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', personalEmpId)
             .gte('date', from).lte('date', to).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用']),
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用','代休']),
         db.from('shifts').select('date, shift_type').eq('employee_id', personalEmpId)
             .gte('date', from).lte('date', to)
     ])
@@ -926,10 +931,11 @@ async function loadPersonalRecord() {
         if (!byDate[r.date]) byDate[r.date] = []
         byDate[r.date].push(r)
     }
-    const leaveByDate = {}, nakByDate = {}, carRecords = []
+    const leaveByDate = {}, nakByDate = {}, daikyuByDate = {}, carRecords = []
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakByDate[r.date] = r
         else if (r.requested_type === '自車使用') carRecords.push(r)
+        else if (r.requested_type === '代休') daikyuByDate[r.date] = r
         else leaveByDate[r.date] = r
     }
     const shiftByDate = {}
@@ -937,7 +943,7 @@ async function loadPersonalRecord() {
 
     const fmt = t => new Date(t).toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})
     const DOW = ['日','月','火','水','木','金','土']
-    let rows = '', totalMins = 0, totalOt = 0
+    let rows = '', totalMins = 0, totalOt = 0, holidayWorkTotal = 0, daikyuTotal = 0
 
     for (let d = 1; d <= lastDay; d++) {
         const ds = `${month}-${String(d).padStart(2,'0')}`
@@ -949,25 +955,32 @@ async function loadPersonalRecord() {
         const be = recs.find(r => r.type === 'break_end')
         const co = [...recs].reverse().find(r => r.type === 'clock_out')
         const leave = leaveByDate[ds]
+        const daikyu = daikyuByDate[ds]
+        const daikyuMins = daikyu ? (daikyu.requested_hours || 0) * 60 : 0
         const leaveLabel = leave
             ? (leave.requested_type === '時間有給' ? `時間有給${leave.requested_hours}h` : leave.requested_type)
-            : ''
+            : (daikyu ? `代休${daikyu.requested_hours}h` : '')
         const leaveMins = calcLeaveMinsFn(leave)
         const nakMins   = calcNakMinsFn(nakByDate[ds])
         const shiftType = shiftByDate[ds] || ''
         const worked    = calcMinsFn(recs, shiftType, personalEmpName)
-        // 終日休暇（有給・研修）は打刻がある日は二重計上しない（打刻優先）
+        const holidayWork = isHolidayDay(ds, dow) && !!ci
         const fullDayLeave = leave && ['有給','研修'].includes(leave.requested_type)
-        // 時間有給・AM/PM有休は「実働＋有休 ≦ 8時間(480分)」まで。超える分は加算しない
         const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - worked))
-        const dayTotal  = worked + effLeaveMins - nakMins
-        const ot        = calcOvertimeFn(recs, shiftType, personalEmpName)
-        if (!ci && !co && !leaveLabel) continue
-        totalMins += dayTotal; totalOt += ot
+        // 休日出勤：実働は全て残業扱い（通常0）。代休は通常勤務に加算
+        const dayTotal  = (holidayWork ? 0 : worked + effLeaveMins - nakMins) + daikyuMins
+        const ot        = holidayWork ? worked : calcOvertimeFn(recs, shiftType, personalEmpName)
+        if (holidayWork) holidayWorkTotal += worked; else totalOt += ot
+        daikyuTotal += daikyuMins
+        if (!ci && !co && !leaveLabel && !daikyu) continue
+        totalMins += dayTotal
         const weekend = dow === 0 || dow === 6
-        const color = weekend ? '#9ca3af' : '#374151'
-        const leaveBadge = leaveLabel
-            ? `<span style="background:#fbcfe8;color:#9d174d;font-size:9px;padding:1px 4px;border-radius:999px;font-weight:600;white-space:nowrap">${leaveLabel}</span>`
+        const color = (weekend && !holidayWork) ? '#9ca3af' : '#374151'
+        const badgeColor = holidayWork ? '#1e3a8a' : daikyu ? '#0369a1' : '#9d174d'
+        const badgeBg    = holidayWork ? '#dbeafe' : daikyu ? '#e0f2fe' : '#fbcfe8'
+        const badgeText  = holidayWork ? '休日出勤' : leaveLabel
+        const leaveBadge = badgeText
+            ? `<span style="background:${badgeBg};color:${badgeColor};font-size:9px;padding:1px 4px;border-radius:999px;font-weight:600;white-space:nowrap">${badgeText}</span>`
             : ''
         rows += `<tr style="border-bottom:1px solid #fce8ef;color:${color}">
             <td style="padding:5px 6px;font-size:12px;white-space:nowrap;font-weight:600">${parseInt(mon)}/${d}（${DOW[dow]}）</td>
@@ -986,6 +999,9 @@ async function loadPersonalRecord() {
             '<div style="text-align:center;color:#9ca3af;padding:40px 20px">この月の記録はありません</div>'
         return
     }
+    totalOt += Math.max(0, holidayWorkTotal - daikyuTotal)  // 休日出勤の残業＝休日出勤−代休
+    if (holidayWorkTotal > 0 || daikyuTotal > 0)
+        rows += `<tr><td colspan="7" style="font-size:10px;color:#0369a1;background:#f0f9ff;padding:4px 8px">休日出勤 計${toHHMMFn(holidayWorkTotal)} ／ 代休 計${toHHMMFn(daikyuTotal)}（代休残高 ${toHHMMFn(Math.max(0,holidayWorkTotal-daikyuTotal))}）</td></tr>`
     rows += `<tr style="background:#fff0f4;font-weight:700;border-top:2px solid #f9a8d4">
         <td style="padding:6px 6px;font-size:12px" colspan="5">合計</td>
         <td style="padding:6px 3px;font-size:13px;text-align:center;color:#c05070">${toHHMMFn(totalMins)}</td>
