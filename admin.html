@@ -905,27 +905,27 @@ async function loadShiftsMonthly() {
         if (s.shift_type) overrideMap[`${s.employee_id}_${s.date}`] = s.shift_type
     }
 
-    // チーム別表示の場合は実績データも取得
-    let attMap      = {} // { empId_date: [records...] }
-    let nakMap      = {} // { empId_date: nakamukeMins }
-    let leaveHrsMap = {} // { empId_date: leave hours（打刻と併用するAM/PM/時間有給） }
-    let daikyuMap   = {} // { empId_date: 代休hours }
+    // 休日出勤・代休のラベルは全タブ共通で表示 → 打刻と代休は常に取得
+    let attMap = {}, nakMap = {}, leaveHrsMap = {}, daikyuMap = {}
+    const [{ data: attData }, { data: daikyuData }] = await Promise.all([
+        db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp'),
+        db.from('shift_requests').select('employee_id,date,requested_hours').gte('date', from).lte('date', to)
+            .eq('status', 'approved').eq('requested_type', '代休')
+    ])
+    for (const r of daikyuData || []) daikyuMap[`${r.employee_id}_${r.date}`] = r.requested_hours || 0
+    for (const r of attData || []) {
+        const k = `${r.employee_id}_${r.date}`
+        if (!attMap[k]) attMap[k] = []
+        attMap[k].push(r)
+    }
+    // 中抜け・AM/PM/時間有給はチーム別の実績集計のみで使うため、その時だけ取得
     if (teamFilter !== 'all') {
-        const [{ data: attData }, { data: nakData }, { data: leaveData }, { data: daikyuData }] = await Promise.all([
-            db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp'),
+        const [{ data: nakData }, { data: leaveData }] = await Promise.all([
             db.from('shift_requests').select('*').gte('date', from).lte('date', to)
                 .eq('status', 'approved').eq('requested_type', '中抜け'),
             db.from('shift_requests').select('*').gte('date', from).lte('date', to)
-                .eq('status', 'approved').in('requested_type', ['AM有休','PM有休','時間有給']),
-            db.from('shift_requests').select('employee_id,date,requested_hours').gte('date', from).lte('date', to)
-                .eq('status', 'approved').eq('requested_type', '代休')
+                .eq('status', 'approved').in('requested_type', ['AM有休','PM有休','時間有給'])
         ])
-        for (const r of daikyuData || []) daikyuMap[`${r.employee_id}_${r.date}`] = r.requested_hours || 0
-        for (const r of attData || []) {
-            const k = `${r.employee_id}_${r.date}`
-            if (!attMap[k]) attMap[k] = []
-            attMap[k].push(r)
-        }
         for (const r of nakData || []) {
             try {
                 const d = JSON.parse(r.reason || '{}')
@@ -1029,12 +1029,17 @@ async function loadShiftsMonthly() {
                 const isHoliday = HOLIDAYS.has(ds)
                 const st = overrideMap[key] !== undefined ? overrideMap[key] : (isWknd || fixedOff || isHoliday ? '休' : (emp.default_shift || '日勤'))
                 const bg = SHIFT_COLORS[st] || '#fff'
+                // 休日出勤（土日祝に打刻）・代休の判定（全タブ共通）
+                const holidayWork = (isWknd || isHoliday) && (attMap[key] || []).some(r => r.type === 'clock_in')
+                const isDaikyu    = daikyuMap[key] != null
 
                 if (teamFilter === 'all') {
-                    // 全員表示：予定シフト時間で集計（個人別上書き対応：川平 午後3.75h）
-                    totalHours += shiftHoursFor(emp.name, st)
-                    const paidLeaveAll = ['有給','AM有休','PM有休','時間有給']  // 研修は実働扱い
-                    if (!paidLeaveAll.includes(st)) totalHoursExcLeave += shiftHoursFor(emp.name, st)
+                    // 全員表示：予定シフト時間で集計（代休の日は休扱い＝0h）
+                    if (!isDaikyu) {
+                        totalHours += shiftHoursFor(emp.name, st)
+                        const paidLeaveAll = ['有給','AM有休','PM有休','時間有給']  // 研修は実働扱い
+                        if (!paidLeaveAll.includes(st)) totalHoursExcLeave += shiftHoursFor(emp.name, st)
+                    }
                 } else {
                     // チーム別表示：実績タイムカードで集計
                     const recs = attMap[key] || []
@@ -1060,9 +1065,7 @@ async function loadShiftsMonthly() {
                     // ds > today（未来日）→ 何も加算しない（0スタート）
                 }
 
-                // 休日出勤（土日祝に打刻）・代休のラベル表示
-                const holidayWork = (isWknd || isHoliday) && (attMap[key] || []).some(r => r.type === 'clock_in')
-                const isDaikyu    = daikyuMap[key] != null
+                // 休日出勤・代休のラベル表示
                 const dispSt = isDaikyu ? '代休' : (holidayWork ? '休日出勤' : st)
                 const cellBg = isDaikyu ? '#e0f2fe' : (holidayWork ? '#dbeafe' : bg)
                 // 長いラベル（AM有休・時間有給など）は文字を縮小＋折り返して見切れ防止
