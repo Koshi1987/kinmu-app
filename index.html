@@ -634,8 +634,9 @@ function scheduleMidnightReset() {
 }
 
 function show(id) {
-    ['v-list','v-act','v-req','v-fix','v-ok','v-shift','v-personal','v-car'].forEach(v =>
-        document.getElementById(v).classList.toggle('hidden', v !== id)
+    // 画面を1つずつ列挙すると追加時に登録もれが起きるので、v- で始まる画面を自動で拾う
+    document.querySelectorAll('[id^="v-"]').forEach(el =>
+        el.classList.toggle('hidden', el.id !== id)
     )
 }
 
@@ -896,7 +897,7 @@ async function loadShiftView() {
 
     const SHIFT_COLORS = {
         '日勤':'#ffffff','午前':'#fef9c3','午後':'#ede9fe','変則':'#d1fae5',
-        '春夏':'#bfdbfe','有給':'#fce7f3','AM有休':'#fbcfe8','PM有休':'#fbcfe8',
+        '春夏':'#bfdbfe','有給':'#fbcfe8','AM有休':'#fbcfe8','PM有休':'#fbcfe8',
         '時間有給':'#fbcfe8','研修':'#bfdbfe','休':'#e0f2fe'
     }
 
