@@ -266,6 +266,7 @@
         <button class="req-btn" style="margin-top:10px;color:#7c6090;border-color:#ddd1f0" onclick="goShiftView()">📅 今月のシフト表</button>
         <button class="req-btn" style="margin-top:10px;color:#b05080;border-color:#f9a8d4" onclick="goMyRecord()">📊 自分の勤務記録</button>
         <button class="req-btn" style="margin-top:10px;color:#5a8a5a;border-color:#bbe0bb" onclick="goCar()">🚗 自車使用申請</button>
+        <button class="req-btn" style="margin-top:10px;color:#b45309;border-color:#fde68a" onclick="goEarly()">🌅 早出残業申請（始業前の勤務）</button>
     </div>
 
     <!-- 画面3: シフト変更申請 -->
@@ -292,7 +293,7 @@
                 <option value="休">休み</option>
             </select>
             <div id="hours-row" style="display:none">
-                <label>⏰ 時間数（1〜8時間）</label>
+                <label>⏰ 時間数</label>
                 <select id="req-hours">
                     <option value="1">1時間</option>
                     <option value="2">2時間</option>
@@ -303,6 +304,7 @@
                     <option value="7">7時間</option>
                     <option value="8">8時間</option>
                 </select>
+                <div id="daikyu-note" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 12px;margin-top:8px;font-size:12px;color:#1e40af;line-height:1.7"></div>
             </div>
             <div id="nakamuke-row" style="display:none">
                 <label>🚶 外出した時間</label>
@@ -338,6 +340,38 @@
             <label>💬 メモ（任意）</label>
             <textarea id="car-memo" placeholder="例：○○さん宅まで送迎"></textarea>
             <button class="req-submit" style="background:linear-gradient(135deg,#bbe0bb,#7fbf7f)" onclick="submitCar()">✉️ 記録する</button>
+        </div>
+    </div>
+
+    <!-- 画面: 早出残業申請 -->
+    <div id="v-early" class="hidden">
+        <button class="back-btn" onclick="show('v-act')">← 戻る</button>
+        <div class="sel-card">
+            <div class="sel-card-deco">🌅 早出残業申請</div>
+            <div class="sel-name" id="early-name"></div>
+            <div class="sel-status">始業前に業務があったとき</div>
+        </div>
+        <div class="req-form">
+            <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:12px;color:#92400e;line-height:1.7;margin-bottom:14px">
+                通常、始業時刻より前の打刻は勤務時間になりません。<br>
+                <b>支援会議・同行受診など予定のある業務</b>で早く出た日は、この申請で<b>残業として計上</b>されます。
+            </div>
+            <label>📅 日付</label>
+            <input type="date" id="early-date">
+            <label>🕐 業務を始めた時刻</label>
+            <input type="time" id="early-start">
+            <label>🎯 用件</label>
+            <select id="early-purpose">
+                <option value="支援会議">支援会議</option>
+                <option value="同行受診">同行受診</option>
+                <option value="送迎">送迎</option>
+                <option value="行事準備">行事準備</option>
+                <option value="研修">研修</option>
+                <option value="その他">その他</option>
+            </select>
+            <label>💬 内容・コメント（任意）</label>
+            <textarea id="early-memo" placeholder="例：○○さんの支援会議に同席のため"></textarea>
+            <button class="req-submit" style="background:linear-gradient(135deg,#fde68a,#f59e0b)" onclick="submitEarly()">✉️ 申請する</button>
         </div>
     </div>
 
@@ -613,15 +647,81 @@ function goReq() {
     document.getElementById('req-reason').value = ''
     document.getElementById('nak-start').value = ''
     document.getElementById('nak-end').value   = ''
+    document.getElementById('req-type').value = '有給'
     document.getElementById('hours-row').style.display    = 'none'
     document.getElementById('nakamuke-row').style.display = 'none'
+    document.getElementById('daikyu-note').style.display  = 'none'
+    daikyuBalanceH = null
+    fillHourOptions(8)
     show('v-req')
 }
+
+let daikyuBalanceH = null   // 代休として取れる残り時間（休日出勤の打刻 − 申請済み）
 
 function toggleHours() {
     const type = document.getElementById('req-type').value
     document.getElementById('hours-row').style.display    = (type === '時間有給' || type === '代休') ? 'block' : 'none'
     document.getElementById('nakamuke-row').style.display = type === '中抜け'   ? 'block' : 'none'
+    const note = document.getElementById('daikyu-note')
+    if (type === '代休') {
+        note.style.display = 'block'
+        note.textContent = '休日出勤の記録を確認中…'
+        loadDaikyuBalance()
+    } else {
+        note.style.display = 'none'
+        daikyuBalanceH = null
+        fillHourOptions(8)
+    }
+}
+
+// 時間数プルダウンを 1〜max時間 で作り直す
+function fillHourOptions(max) {
+    const sel = document.getElementById('req-hours')
+    const cur = sel.value
+    const n = Math.floor(max)
+    sel.innerHTML = n >= 1
+        ? Array.from({length: Math.min(n, 8)}, (_, i) => `<option value="${i+1}">${i+1}時間</option>`).join('')
+        : '<option value="">取得できる時間がありません</option>'
+    if (cur && parseInt(cur) <= n) sel.value = cur
+}
+
+// 打刻ベースで代休の残り時間を計算する（過去6か月の休日出勤 − 申請済みの代休）
+async function loadDaikyuBalance() {
+    const note = document.getElementById('daikyu-note')
+    const fromD = new Date(); fromD.setMonth(fromD.getMonth() - 6)
+    const fromS = fromD.toLocaleDateString('sv-SE')
+    try {
+        const [{ data: att }, { data: reqs }] = await Promise.all([
+            db.from('attendance').select('*').eq('employee_id', selEmp.id).gte('date', fromS).order('timestamp'),
+            db.from('shift_requests').select('date,requested_hours,status').eq('employee_id', selEmp.id)
+                .gte('date', fromS).eq('requested_type', '代休').in('status', ['pending','approved'])
+        ])
+        const byDate = {}
+        for (const r of att || []) (byDate[r.date] = byDate[r.date] || []).push(r)
+        let workedH = 0
+        const days = []
+        for (const ds of Object.keys(byDate).sort()) {
+            if (!isHolidayDay(ds)) continue                 // 土日祝の打刻だけが休日出勤
+            const m = calcHolidayMins(byDate[ds])
+            if (m <= 0) continue
+            workedH += m / 60
+            days.push(`${ds.slice(5).replace('-','/')} ${(m/60).toFixed(1)}h`)
+        }
+        let usedH = 0
+        for (const r of reqs || []) usedH += (r.requested_hours || 0)
+        daikyuBalanceH = Math.max(0, workedH - usedH)
+        fillHourOptions(daikyuBalanceH)
+        if (workedH === 0) {
+            note.innerHTML = '<b style="color:#b91c1c">休日出勤の打刻がありません。</b><br>代休は、土日祝に出勤して打刻した分だけ申請できます。'
+        } else {
+            note.innerHTML = `休日出勤 <b>${workedH.toFixed(1)}時間</b>　申請済み <b>${usedH.toFixed(1)}時間</b><br>`
+                + `<b style="font-size:14px;color:${daikyuBalanceH > 0 ? '#0369a1' : '#b91c1c'}">→ 取れる代休：残り ${daikyuBalanceH.toFixed(1)}時間</b><br>`
+                + `<span style="font-size:11px;color:#6b7280">対象の休日出勤：${days.join('　/　')}</span>`
+        }
+    } catch(e) {
+        daikyuBalanceH = null
+        note.innerHTML = '<span style="color:#b91c1c">残り時間を取得できませんでした。管理者に確認してください。</span>'
+    }
 }
 
 function goFix() {
@@ -696,12 +796,48 @@ async function submitCar() {
     } catch(e) { alert('エラー: ' + e.message) }
 }
 
+function goEarly() {
+    document.getElementById('early-name').textContent = selEmp.name
+    document.getElementById('early-date').value = todayStr()
+    document.getElementById('early-start').value = ''
+    document.getElementById('early-purpose').value = '支援会議'
+    document.getElementById('early-memo').value = ''
+    show('v-early')
+}
+
+async function submitEarly() {
+    const date    = document.getElementById('early-date').value
+    const start   = document.getElementById('early-start').value
+    const purpose = document.getElementById('early-purpose').value
+    const memo    = document.getElementById('early-memo').value
+    if (!date)  return alert('日付を選択してください')
+    if (!start) return alert('業務を始めた時刻を入力してください')
+    try {
+        await db.from('shift_requests').insert({
+            employee_id: selEmp.id, date,
+            requested_type: '早出残業',
+            reason: JSON.stringify({ start, purpose, comment: memo }),
+            requested_hours: 0
+        })
+        document.getElementById('ok-act').textContent  = '早出残業を申請しました'
+        document.getElementById('ok-who').textContent  = selEmp.name + '　' + date
+        document.getElementById('ok-time').textContent = `${start}〜　${purpose}`
+        document.getElementById('ok-msg').textContent  = '承認されると残業に計上されます 🌅'
+        show('v-ok')
+    } catch(e) { alert('エラー: ' + e.message) }
+}
+
 async function submitRequest() {
     const date  = document.getElementById('req-date').value
     const type  = document.getElementById('req-type').value
     let reason  = document.getElementById('req-reason').value
     let hours   = (type === '時間有給' || type === '代休') ? parseInt(document.getElementById('req-hours').value) : 0
     if (!date) return alert('日付を選択してください')
+    if (type === '代休') {
+        if (!hours) return alert('取れる代休がありません。休日出勤の打刻を確認してください。')
+        if (daikyuBalanceH != null && hours > daikyuBalanceH)
+            return alert(`代休は残り ${daikyuBalanceH.toFixed(1)}時間までです。\n（休日出勤した時間の範囲で申請してください）`)
+    }
     if (type === '中抜け') {
         const bs = document.getElementById('nak-start').value
         const be = document.getElementById('nak-end').value
@@ -837,17 +973,67 @@ const PERSON_TIME = {
     '藤井': { capH: 14, capM: 0, otH: 18, otM: 0 },
     '輪湖': { capH: 9,  capM: 0, otH: 14, otM: 0 },
 }
+// 春夏勤務の個人別ルール（藤井・川平: 9:00〜16:30 ／ 名取: 9:00〜15:00）
+const PERSON_TIME_HARUNATSU = {
+    '藤井': { capH: 9, capM: 0, otH: 16, otM: 30 },
+    '川平': { capH: 9, capM: 0, otH: 16, otM: 30 },
+    '名取': { capH: 9, capM: 0, otH: 15, otM: 0 },
+}
 function workTimeRule(shiftType, name) {
-    if (shiftType === '春夏') return { capH: 8, capM: 30, otH: 16, otM: 30 }
+    if (shiftType === '春夏') {
+        for (const k in PERSON_TIME_HARUNATSU) if (name && name.includes(k)) return PERSON_TIME_HARUNATSU[k]
+        return { capH: 8, capM: 30, otH: 16, otM: 30 }
+    }
     for (const k in PERSON_TIME) if (name && name.includes(k)) return PERSON_TIME[k]
     return { capH: 9, capM: 0, otH: 18, otM: 0 }
 }
+// 休日出勤の実働（分）：平日の開始時刻キャップを使わず打刻どおりに計算（7時間以上は最低60分休憩）
+function calcHolidayMins(records) {
+    const sorted = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
+    const ci = sorted.find(r => r.type === 'clock_in')
+    const co = [...sorted].reverse().find(r => r.type === 'clock_out')
+    if (!ci || !co) return 0
+    let brk = 0, bs = null
+    for (const r of sorted) {
+        if (r.type === 'break_start') bs = new Date(r.timestamp)
+        else if (r.type === 'break_end' && bs) { brk += (new Date(r.timestamp) - bs) / 60000; bs = null }
+    }
+    const elapsed = (new Date(co.timestamp) - new Date(ci.timestamp)) / 60000
+    const effBrk  = elapsed >= 420 ? Math.max(60, brk) : brk
+    return Math.max(0, Math.floor(elapsed - effBrk))
+}
+
 function isHolidayDay(ds, dow) {
     if (dow == null) dow = new Date(ds).getDay()
     return dow === 0 || dow === 6 || HOLIDAYS.has(ds)
 }
 
-function calcMinsFn(records, shiftType = '', name = '') {
+// ===== 早出残業（9時前勤務）：承認済みならその時刻から残業として計上 =====
+function earlyStartOf(req) {
+    if (!req) return null
+    try { const d = JSON.parse(req.reason || '{}'); return d.start || null } catch(e) { return null }
+}
+function applyEarlyCap(cap, earlyStart) {
+    if (!earlyStart) return cap
+    const e = new Date(cap)
+    e.setHours(parseInt(earlyStart.slice(0,2)), parseInt(earlyStart.slice(3,5)), 0, 0)
+    if (e < cap) cap.setTime(e.getTime())
+    return cap
+}
+function calcEarlyOtFn(records, shiftType = '', name = '', earlyStart = null) {
+    if (!earlyStart) return 0
+    const ciRec = [...records].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
+        .find(r => r.type === 'clock_in')
+    if (!ciRec) return 0
+    const t = new Date(ciRec.timestamp)
+    const rule = workTimeRule(shiftType, name)
+    const norm = new Date(t); norm.setHours(rule.capH, rule.capM, 0, 0)
+    const appr = new Date(t); appr.setHours(parseInt(earlyStart.slice(0,2)), parseInt(earlyStart.slice(3,5)), 0, 0)
+    const start = t > appr ? t : appr
+    return start < norm ? Math.floor((norm - start) / 60000) : 0
+}
+
+function calcMinsFn(records, shiftType = '', name = '', earlyStart = null) {
     const isHarunatsu = shiftType === '春夏'
     const rule = workTimeRule(shiftType, name)
     let ci = null, bs = null, brk = 0, result = 0
@@ -856,6 +1042,7 @@ function calcMinsFn(records, shiftType = '', name = '') {
         const t = new Date(r.timestamp)
         if (r.type === 'clock_in') {
             const cap = new Date(t); cap.setHours(rule.capH, rule.capM, 0, 0)
+            applyEarlyCap(cap, earlyStart)
             ci = t < cap ? cap : t
         } else if (r.type === 'break_start') {
             bs = t
@@ -876,14 +1063,15 @@ function calcMinsFn(records, shiftType = '', name = '') {
     return Math.max(0, Math.floor(result))
 }
 
-function calcOvertimeFn(records, shiftType = '', name = '') {
+function calcOvertimeFn(records, shiftType = '', name = '', earlyStart = null) {
+    const early = calcEarlyOtFn(records, shiftType, name, earlyStart)
     const co = [...records].reverse().find(r => r.type === 'clock_out')
-    if (!co) return 0
+    if (!co) return early
     const coTime = new Date(co.timestamp)
     const rule = workTimeRule(shiftType, name)
     const base = new Date(coTime)
     base.setHours(rule.otH, rule.otM, 0, 0)
-    return coTime > base ? Math.floor((coTime - base) / 60000) : 0
+    return early + (coTime > base ? Math.floor((coTime - base) / 60000) : 0)
 }
 
 function calcLeaveMinsFn(req) {
@@ -921,7 +1109,7 @@ async function loadPersonalRecord() {
             .gte('date', from).lte('date', to).order('timestamp'),
         db.from('shift_requests').select('*').eq('employee_id', personalEmpId)
             .gte('date', from).lte('date', to).eq('status', 'approved')
-            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用','代休']),
+            .in('requested_type', ['有給','AM有休','PM有休','時間有給','研修','中抜け','自車使用','代休','早出残業']),
         db.from('shifts').select('date, shift_type').eq('employee_id', personalEmpId)
             .gte('date', from).lte('date', to)
     ])
@@ -931,11 +1119,12 @@ async function loadPersonalRecord() {
         if (!byDate[r.date]) byDate[r.date] = []
         byDate[r.date].push(r)
     }
-    const leaveByDate = {}, nakByDate = {}, daikyuByDate = {}, carRecords = []
+    const leaveByDate = {}, nakByDate = {}, daikyuByDate = {}, earlyByDate = {}, carRecords = []
     for (const r of reqData || []) {
         if (r.requested_type === '中抜け') nakByDate[r.date] = r
         else if (r.requested_type === '自車使用') carRecords.push(r)
         else if (r.requested_type === '代休') daikyuByDate[r.date] = r
+        else if (r.requested_type === '早出残業') earlyByDate[r.date] = earlyStartOf(r)
         else leaveByDate[r.date] = r
     }
     const shiftByDate = {}
@@ -963,13 +1152,17 @@ async function loadPersonalRecord() {
         const leaveMins = calcLeaveMinsFn(leave)
         const nakMins   = calcNakMinsFn(nakByDate[ds])
         const shiftType = shiftByDate[ds] || ''
-        const worked    = calcMinsFn(recs, shiftType, personalEmpName)
+        const early     = earlyByDate[ds] || null
         const holidayWork = isHolidayDay(ds, dow) && !!ci
+        // 休日出勤は平日の開始時刻キャップを使わず打刻どおりに計算する
+        const worked    = holidayWork ? calcHolidayMins(recs) : calcMinsFn(recs, shiftType, personalEmpName, early)
         const fullDayLeave = leave && ['有給','研修'].includes(leave.requested_type)
-        const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - worked))
+        // 早出残業分は残業なので、有休の上限（実働＋有休≦8時間）の計算からは除く
+        const earlyOtMins  = calcEarlyOtFn(recs, shiftType, personalEmpName, early)
+        const effLeaveMins = (ci && fullDayLeave) ? 0 : Math.min(leaveMins, Math.max(0, 480 - (worked - earlyOtMins)))
         // 休日出勤：実働は全て残業扱い（通常0）。代休は通常勤務に加算
         const dayTotal  = (holidayWork ? 0 : worked + effLeaveMins - nakMins) + daikyuMins
-        const ot        = holidayWork ? worked : calcOvertimeFn(recs, shiftType, personalEmpName)
+        const ot        = holidayWork ? worked : calcOvertimeFn(recs, shiftType, personalEmpName, early)
         if (holidayWork) holidayWorkTotal += worked; else totalOt += ot
         daikyuTotal += daikyuMins
         if (!ci && !co && !leaveLabel && !daikyu) continue
@@ -979,9 +1172,10 @@ async function loadPersonalRecord() {
         const badgeColor = holidayWork ? '#1e3a8a' : daikyu ? '#0369a1' : '#9d174d'
         const badgeBg    = holidayWork ? '#dbeafe' : daikyu ? '#e0f2fe' : '#fbcfe8'
         const badgeText  = holidayWork ? '休日出勤' : leaveLabel
-        const leaveBadge = badgeText
+        const leaveBadge = (badgeText
             ? `<span style="background:${badgeBg};color:${badgeColor};font-size:9px;padding:1px 4px;border-radius:999px;font-weight:600;white-space:nowrap">${badgeText}</span>`
-            : ''
+            : '')
+            + (early ? `<span style="background:#fef3c7;color:#92400e;font-size:9px;padding:1px 4px;border-radius:999px;font-weight:700;white-space:nowrap">🌅早出</span>` : '')
         rows += `<tr style="border-bottom:1px solid #fce8ef;color:${color}">
             <td style="padding:5px 6px;font-size:12px;white-space:nowrap;font-weight:600">${parseInt(mon)}/${d}（${DOW[dow]}）</td>
             <td style="padding:5px 3px;font-size:12px;text-align:center">${ci ? fmt(ci.timestamp) : (leaveBadge || '-')}</td>
