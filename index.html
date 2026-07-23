@@ -657,6 +657,8 @@ function goReq() {
 }
 
 let daikyuBalanceH = null   // 代休として取れる残り時間（休日出勤の打刻 − 申請済み）
+// この日より前の休日出勤は代休の対象にしない（旧タイムカード期間・テスト打刻を除くため）
+const DAIKYU_FROM = '2026-06-11'
 
 function toggleHours() {
     const type = document.getElementById('req-type').value
@@ -689,7 +691,8 @@ function fillHourOptions(max) {
 async function loadDaikyuBalance() {
     const note = document.getElementById('daikyu-note')
     const fromD = new Date(); fromD.setMonth(fromD.getMonth() - 6)
-    const fromS = fromD.toLocaleDateString('sv-SE')
+    // 「6か月前」と「運用開始日」の遅い方から集計する
+    const fromS = [fromD.toLocaleDateString('sv-SE'), DAIKYU_FROM].sort().pop()
     try {
         const [{ data: att }, { data: reqs }] = await Promise.all([
             db.from('attendance').select('*').eq('employee_id', selEmp.id).gte('date', fromS).order('timestamp'),
@@ -713,6 +716,7 @@ async function loadDaikyuBalance() {
         fillHourOptions(daikyuBalanceH)
         if (workedH === 0) {
             note.innerHTML = '<b style="color:#b91c1c">休日出勤の打刻がありません。</b><br>代休は、土日祝に出勤して打刻した分だけ申請できます。'
+                + `<br><span style="font-size:11px;color:#6b7280">（${DAIKYU_FROM.replace(/-/g,'/')}以降の打刻が対象です）</span>`
         } else {
             note.innerHTML = `休日出勤 <b>${workedH.toFixed(1)}時間</b>　申請済み <b>${usedH.toFixed(1)}時間</b><br>`
                 + `<b style="font-size:14px;color:${daikyuBalanceH > 0 ? '#0369a1' : '#b91c1c'}">→ 取れる代休：残り ${daikyuBalanceH.toFixed(1)}時間</b><br>`

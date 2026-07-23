@@ -1580,46 +1580,60 @@ async function loadAuditShifts() {
     hdr += `<th style="background:#eef2ff;min-width:62px;text-align:center;font-size:11px;padding:3px 4px">月勤務<br>常勤換算<br><span style="font-size:9px;color:#6b7280">（予定）</span></th>`
     hdr += `<th style="background:#f0f9ff;min-width:62px;text-align:center;font-size:11px;padding:3px 4px;color:#0369a1">月勤務<br>常勤換算<br><span style="font-size:9px">（実績）</span></th>`
 
-    // ===== 池内 FTE自動最適化（午後=現場半日を最大化し、2.0常勤に届く分だけ日勤を配置） =====
-    const ikeuchiNikkinDays = new Set()
-    const ikeuchi = empByName('池内')
-    if (ikeuchi && nonRegReq > 0) {
-        // 監査用の勤務形態を求める小関数（手動>予定ベース）
-        const auditStOf = (e, dow, ds) => {
-            const k = `${e.id}_${ds}`
-            if (auditMap[k] !== undefined) return auditMap[k]
-            const p = planShiftOf(e, dow, ds, overrideMap)
-            return (p === '日勤') ? auditDefaultOf(e.name) : p
-        }
-        // 1. 他3人（川平・藤沢・名取）の月勤務時間（有休除く）
+    // ===== 半日勤務→日勤の自動最適化 =====
+    // リーノ2＝池内（午後＝現場）／リーノ1＝坂上（午前＝現場）を、必要な常勤換算に届くまで日勤に振り替える。
+    // 計画相談の時間をできるだけ残したいので、日勤にするのは「足りない分だけ」＝最小日数。
+    const optNikkinDays = new Set()
+    const optimizer = empByName('池内') || empByName('坂上')
+    let optShortage = 0    // 全部日勤にしても足りない時間（h）
+    let optAutoDays = 0    // 日勤に振り替えられる日数（休・有給・手動設定の日は振替不可）
+    if (optimizer && nonRegReq > 0) {
+        const optName  = optimizer.name
+        const baseH    = auditHours(auditDefaultOf(optName), true, optName)   // 池内 午後4h／坂上 午前4.5h
+        // 1. 本人以外のグループ員の月勤務時間（有休除く）
         let othersHours = 0
-        for (const nm of ['川平','藤沢','名取']) {
-            const o = empByName(nm); if (!o) continue
-            for (const { dow, ds } of days) othersHours += auditHours(auditStOf(o, dow, ds), true, o.name)
+        for (const e of displayEmps) {
+            if (e.id === optimizer.id || !isGroupMember(e.name) || empTypeOf(e.name) !== '非常勤') continue
+            for (const { dow, ds } of days) othersHours += auditHours(simpleAuditSt(e, dow, ds), true, e.name)
         }
-        // 2. 池内の「現場半日/日勤を割り当てられる日」と固定分（手動・休・有休・春夏）
-        const ikeuchiBaseShift = auditDefaultOf(ikeuchi.name)                 // 午後
-        const ikeuchiBaseH     = auditHours(ikeuchiBaseShift, true, ikeuchi.name)  // 午後=4h
+        // 2. 本人の「日勤に振り替えられる日」と、動かせない日（手動・休・有休・春夏など）
         const autoDays = []
-        let ikeuchiFixed = 0
+        let fixedHours = 0
         for (const { dow, ds } of days) {
-            const k = `${ikeuchi.id}_${ds}`
-            if (auditMap[k] !== undefined) { ikeuchiFixed += auditHours(auditMap[k], true, ikeuchi.name); continue }
-            const p = planShiftOf(ikeuchi, dow, ds, overrideMap)
-            if (!['日勤','午前','午後'].includes(p)) { ikeuchiFixed += auditHours(p, true, ikeuchi.name); continue } // 休・有給・春夏など固定
+            const k = `${optimizer.id}_${ds}`
+            if (auditMap[k] !== undefined) { fixedHours += auditHours(auditMap[k], true, optName); continue }
+            const p = planShiftOf(optimizer, dow, ds, overrideMap)
+            if (!['日勤','午前','午後'].includes(p)) { fixedHours += auditHours(p, true, optName); continue }
             autoDays.push(ds)
         }
-        // 3. 目標に必要な日勤日数（現場半日を最大化＝日勤最小）
-        const target   = nonRegReq * reqFTE
-        const base     = othersHours + ikeuchiFixed + autoDays.length * ikeuchiBaseH
-        const deficit  = target - base
-        const perNik   = (SHIFT_HOURS['日勤'] || 8) - ikeuchiBaseH
-        let numNik     = deficit > 0 ? Math.ceil(deficit / perNik) : 0
-        numNik = Math.min(numNik, autoDays.length)
-        // 4. 日勤日を月内に均等分散
+        optAutoDays = autoDays.length
+        // 3. 必要な日勤日数を計算（半日を最大化＝日勤は最小限）
+        const target  = nonRegReq * reqFTE
+        const base    = othersHours + fixedHours + autoDays.length * baseH
+        const deficit = target - base
+        const perNik  = (SHIFT_HOURS['日勤'] || 8) - baseH        // 1日日勤にすると増える時間
+        let numNik    = (deficit > 0 && perNik > 0) ? Math.ceil(deficit / perNik) : 0
+        if (numNik > autoDays.length) {   // 全部日勤にしても届かない場合
+            optShortage = deficit - autoDays.length * perNik
+            numNik = autoDays.length
+        }
+        // 4. 日勤にする日を選ぶ（坂上は「藤井が休みの日」を優先、残りは月内に均等分散）
         if (numNik > 0) {
-            const step = autoDays.length / numNik
-            for (let i = 0; i < numNik; i++) ikeuchiNikkinDays.add(autoDays[Math.floor(i * step)])
+            let picked = []
+            if (optName.includes('坂上')) {
+                const fuj = empByName('藤井')
+                if (fuj) picked = autoDays.filter(ds => {
+                    const d = days.find(x => x.ds === ds)
+                    return AUDIT_LEAVE_SPECIAL.includes(simpleAuditSt(fuj, d.dow, ds))
+                }).slice(0, numNik)
+            }
+            const rest = autoDays.filter(ds => !picked.includes(ds))
+            const need = numNik - picked.length
+            if (need > 0) {
+                const step = rest.length / need
+                for (let i = 0; i < need; i++) picked.push(rest[Math.floor(i * step)])
+            }
+            for (const ds of picked) optNikkinDays.add(ds)
         }
     }
 
@@ -1642,14 +1656,9 @@ async function loadAuditShifts() {
             const planSt = planShiftOf(emp, dow, ds, overrideMap)
             let draft = (planSt === '日勤') ? auditDefaultOf(emp.name) : planSt
             // 坂上・池内は休みを考慮して午前/日勤を自動割当（勤務日のみ）
-            if (['午前','午後','日勤','変則'].includes(draft)) {
-                if (emp.name.includes('坂上')) {
-                    const fuj = empByName('藤井')
-                    const fOff = fuj ? AUDIT_LEAVE_SPECIAL.includes(planShiftOf(fuj, dow, ds, overrideMap)) : false
-                    draft = fOff ? '日勤' : '午前'  // 藤井が休み→日勤、それ以外→午前
-                } else if (emp.name.includes('池内')) {
-                    draft = ikeuchiNikkinDays.has(ds) ? '日勤' : '午後'  // FTE自動最適化で割当（午後=現場半日を最大化）
-                }
+            // 調整役（リーノ2＝池内／リーノ1＝坂上）は、必要な常勤換算に届く分だけ自動で日勤にする
+            if (['午前','午後','日勤','変則'].includes(draft) && optimizer && emp.id === optimizer.id) {
+                draft = optNikkinDays.has(ds) ? '日勤' : auditDefaultOf(emp.name)
             }
             // 兼務者（藤井・輪湖）は事業所ごとに配置を決める（同日の二重配置を防ぐ）
             let st, isOv, otherTeamName = null
@@ -1772,6 +1781,20 @@ async function loadAuditShifts() {
             <div style="font-size:13px;font-weight:800;color:#0369a1;margin-top:6px">児童指導員等加配加算（実績）</div>
             <div style="font-size:12px;color:#0369a1;font-weight:700">${(nonRegActual / reqFTE).toFixed(2)}人（${nonRegActual.toFixed(1)}h）<span style="font-size:10px;color:#6b7280;font-weight:500">　※当日まで・打刻ベース・残業除く</span></div>
         </div>`
+        // 調整役の日勤振り替え状況
+        if (optimizer && isGroupMember(optimizer.name)) {
+            const nk = optNikkinDays.size
+            panel += `<div style="font-size:11px;color:#4338ca;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:7px 11px;margin-top:8px;line-height:1.7">
+                🔄 <b>${optimizer.name}</b>：必要時間に届くよう <b>日勤 ${nk}日</b> を自動配置しました（振替できる日 ${optAutoDays}日中）。残りは${auditDefaultOf(optimizer.name)}勤務＝計画相談の時間を確保。セルを直接クリックすれば手動で上書きできます。`
+            if (optShortage > 0) {
+                panel += `<br><span style="color:#b91c1c;font-weight:700">⚠️ ${optimizer.name}を振替可能な${optAutoDays}日すべて日勤にしても ${optShortage.toFixed(1)}時間（${(optShortage/reqFTE).toFixed(2)}人分）足りません。</span>
+                          → ①藤井・輪湖をこの事業所に入れる日を増やす　②他の職員の勤務日・勤務時間を増やす　③${optimizer.name}の休み・有給の日を減らす　のいずれかが必要です。`
+            } else if (optAutoDays === 0) {
+                panel += `<br><span style="color:#b91c1c;font-weight:700">⚠️ ${optimizer.name}に日勤へ振り替えられる日がありません。</span>
+                          休み・有給・手動設定の日は振替対象外です。職員設定の「固定休」や予定シフトを確認してください。`
+            }
+            panel += `</div>`
+        }
     }
     // 日勤多すぎアラート（兼任者）
     const kNames = Object.keys(kenninStat)
