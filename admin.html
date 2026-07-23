@@ -1584,23 +1584,29 @@ async function loadAuditShifts() {
     // リーノ2＝池内（午後＝現場）／リーノ1＝坂上（午前＝現場）を、必要な常勤換算に届くまで日勤に振り替える。
     // 計画相談の時間をできるだけ残したいので、日勤にするのは「足りない分だけ」＝最小日数。
     const optNikkinDays = new Set()
-    const optimizer = empByName('池内') || empByName('坂上')
+    // ★調整役は「今開いている事業所にいる人」から選ぶ（リーノ2＝池内／リーノ1＝坂上）
+    const optimizer = displayEmps.find(e => e.name.includes('池内'))
+                   || displayEmps.find(e => e.name.includes('坂上'))
     let optShortage = 0    // 全部日勤にしても足りない時間（h）
     let optAutoDays = 0    // 日勤に振り替えられる日数（休・有給・手動設定の日は振替不可）
     if (optimizer && nonRegReq > 0) {
         const optName  = optimizer.name
         const baseH    = auditHours(auditDefaultOf(optName), true, optName)   // 池内 午後4h／坂上 午前4.5h
-        // 1. 本人以外のグループ員の月勤務時間（有休除く）
+        // 1. 本人以外のグループ員の月勤務時間（有休除く。代休の日は休み＝0h）
         let othersHours = 0
         for (const e of displayEmps) {
             if (e.id === optimizer.id || !isGroupMember(e.name) || empTypeOf(e.name) !== '非常勤') continue
-            for (const { dow, ds } of days) othersHours += auditHours(simpleAuditSt(e, dow, ds), true, e.name)
+            for (const { dow, ds } of days) {
+                if (daikyuSet.has(`${e.id}_${ds}`)) continue      // 代休＝0h
+                othersHours += auditHours(simpleAuditSt(e, dow, ds), true, e.name)
+            }
         }
-        // 2. 本人の「日勤に振り替えられる日」と、動かせない日（手動・休・有休・春夏など）
+        // 2. 本人の「日勤に振り替えられる日」と、動かせない日（手動・休・有休・代休・春夏など）
         const autoDays = []
         let fixedHours = 0
         for (const { dow, ds } of days) {
             const k = `${optimizer.id}_${ds}`
+            if (daikyuSet.has(k)) continue                        // 代休＝0h・振替不可
             if (auditMap[k] !== undefined) { fixedHours += auditHours(auditMap[k], true, optName); continue }
             const p = planShiftOf(optimizer, dow, ds, overrideMap)
             if (!['日勤','午前','午後'].includes(p)) { fixedHours += auditHours(p, true, optName); continue }
