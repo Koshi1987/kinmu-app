@@ -2098,17 +2098,23 @@ async function loadAuditShifts() {
                 : v >= need                    ? { c:'#b45309', m:'⚠️' }
                 :                                { c:'#dc2626', m:'❌' }
             // 1セル（予定・実績を上下に）
-            const cell = need => {
+            const sgn = v => (v >= 0 ? '+' : '') + v.toFixed(2)
+            const cell = (need, name) => {
                 const jp = judge(planFTE, need)
+                const tip = `${name}：必要 ${need.toFixed(2)}人（基準配置${baseNeed} ＋ 加算分）\n`
+                          + `予定 ${planFTE.toFixed(2)}人 → ${sgn(planFTE-need)}\n`
+                          + (futureWk ? '実績 未到来' : `実績 ${actualFTE.toFixed(2)}人 → ${sgn(actualFTE-need)}`)
+                          + `\n※プラスなら算定できます`
                 const actLine = futureWk
                     ? `<div style="font-size:12px;font-weight:700;color:#9ca3af">－ <span style="font-size:10px">実績</span> 未到来</div>`
                     : (() => {
                         const ja = judge(actualFTE, need)
-                        return `<div style="font-size:13px;font-weight:800;color:${ongoingWk?'#9ca3af':ja.c}">${ongoingWk?'…':ja.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">実績</span> ${(actualFTE-need).toFixed(2)}</div>`
+                        return `<div style="font-size:13px;font-weight:800;color:${ongoingWk?'#9ca3af':ja.c}">${ongoingWk?'…':ja.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">実績</span> ${sgn(actualFTE-need)}</div>`
                     })()
-                return `<td style="padding:5px 6px;text-align:center;white-space:nowrap;border-left:1px solid #eef2ff">
-                    <div style="font-size:13px;font-weight:800;color:${jp.c}">${jp.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">予定</span> ${(planFTE-need).toFixed(2)}</div>
+                return `<td title="${tip}" style="padding:5px 6px;text-align:center;white-space:nowrap;border-left:1px solid #eef2ff;cursor:help">
+                    <div style="font-size:13px;font-weight:800;color:${jp.c}">${jp.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">予定</span> ${sgn(planFTE-need)}</div>
                     ${actLine}
+                    <div style="font-size:9px;color:#cbd5e1">必要${need.toFixed(2)}</div>
                 </td>`
             }
             const wEnd = w.days[w.days.length - 1].ds
@@ -2126,7 +2132,7 @@ async function loadAuditShifts() {
                     <div style="font-size:13px;font-weight:800;color:#374151">予定 ${planFTE.toFixed(2)}人</div>
                     <div style="font-size:13px;font-weight:800;color:${futureWk?'#9ca3af':'#0369a1'}">実績 ${futureWk?'－':actualFTE.toFixed(2)+'人'+(ongoingWk?'<span style="font-size:9px;color:#9ca3af">(途中)</span>':'')}</div>
                 </td>
-                ${cell(baseNeed)}${cell(needKahai)}${cell(needSenmon)}
+                ${cell(baseNeed,'①基準配置')}${cell(needKahai,'②児童指導員等加配加算')}${cell(needSenmon,'③専門的支援体制加算')}
             </tr>`
         }
         const role = KASAN_ROLE[teamKey] || {}
