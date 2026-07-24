@@ -1441,8 +1441,11 @@ const KASAN_ROLE = {
     'リーノ2': { kahai: '大野', senmon: '名取・藤井' },
 }
 // ===== 1日単位のチェック：午前・午後それぞれに基準配置人数がいるか =====
-const COVER_AM = ['日勤','午前','変則','春夏']   // 午前をカバーする勤務形態
-const COVER_PM = ['日勤','午後','変則','春夏']   // 午後をカバーする勤務形態
+// 基準配置は「その時間帯に実際にいるか」で見る（常勤換算の時間数とは別物）。
+// 有給・研修の人はその場にいないので頭数に数えない。
+// ただし AM有休＝午前だけ休み→午後は勤務、PM有休＝午後だけ休み→午前は勤務。
+const COVER_AM = ['日勤','午前','変則','春夏','PM有休','時間有給']   // 午前にいる勤務形態
+const COVER_PM = ['日勤','午後','変則','春夏','AM有休','時間有給']   // 午後にいる勤務形態
 // 打刻が無い勤務形態（実績は勤務形態から補う）
 const NO_PUNCH_TYPES = ['有給','AM有休','PM有休','時間有給','研修']
 // 同じ日に2人とも休むと基準配置が崩れる組み合わせ
@@ -1658,6 +1661,16 @@ async function loadAuditShifts() {
                    || displayEmps.find(e => e.name.includes('坂上'))
     let optAutoDays = 0            // 日勤に振り替えられる日数（休・有給・手動設定の日は振替不可）
     const optWeekInfo = []         // 週ごとの結果（メッセージ用）
+    // 月をまたぐ週（月外に平日がある週）はこの月の分しか集計できないので判定を出さない
+    const isPartialWeek = wkKey => {
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(wkKey); d.setDate(d.getDate() + i)
+            const s = d.toLocaleDateString('sv-SE')
+            if (s >= from && s <= to) continue
+            if (d.getDay() !== 0 && d.getDay() !== 6 && !HOLIDAYS.has(s)) return true
+        }
+        return false
+    }
     if (optimizer) {
         const optName = optimizer.name
         const baseH   = auditHours(auditDefaultOf(optName), true, optName)   // 池内 午後4h／坂上 午前4.5h
@@ -1705,8 +1718,11 @@ async function loadAuditShifts() {
             const target  = goal === 'senmon' ? needSenmon : needKahai
             const deficit = target - base
             let n = (deficit > 0 && perNik > 0) ? Math.ceil(deficit / perNik) : 0
-            let short = 0
-            if (n > w.auto.length) { short = (deficit - w.auto.length * perNik) / w.std; n = w.auto.length }
+            // 全部日勤にしたときに、①加算ラインそのもの ②余裕込みライン のどちらに届かないか
+            const lineKahai = (baseNeed + KAHAI_STEP) * w.std
+            const shortLine = Math.max(0, (lineKahai - maxReach) / w.std)   // 0より大きい＝加配が取れない
+            const shortBuf  = Math.max(0, (target    - maxReach) / w.std)   // 0より大きい＝余裕が足りない
+            if (n > w.auto.length) n = w.auto.length
             // 週内で日を選ぶ（相方が休む日を優先 → 残りは週内に均等分散）
             if (n > 0) {
                 let picked = []
@@ -1722,7 +1738,7 @@ async function loadAuditShifts() {
                 }
                 for (const ds of picked) optNikkinDays.add(ds)
             }
-            optWeekInfo.push({ key: k, nikkin: n, autoN: w.auto.length, goal, short })
+            optWeekInfo.push({ key: k, nikkin: n, autoN: w.auto.length, goal, shortLine, shortBuf, partial: isPartialWeek(k) })
         }
     }
 
@@ -1895,7 +1911,9 @@ async function loadAuditShifts() {
 
     // --- 1日ごとの基準配置：不足日と「2人とも休み」の警告 ---
     if (auditView.daily) {
-        // 同じ日に2人とも勤務していない組み合わせ（大野＆池内／藤井＆坂上）
+        // 同じ日に2人とも休みの組み合わせ（大野＆池内／藤井＆坂上）
+        //   実際に人数が足りない日は下の「基準配置が足りない」で報告するのでここでは扱わない。
+        //   ここで出すのは「ちょうど必要数ちょうど＝もう1人休んだらアウト」の日だけ。
         const pairHits = []
         for (const [a, b] of PAIR_WARN) {
             const ea = displayEmps.find(e => e.name.includes(a))
@@ -1905,22 +1923,28 @@ async function loadAuditShifts() {
                 if (!operatingSet.has(ds)) continue
                 const offA = !WORKING_TYPES.includes(simpleAuditSt(ea, dow, ds)) || daikyuSet.has(`${ea.id}_${ds}`)
                 const offB = !WORKING_TYPES.includes(simpleAuditSt(eb, dow, ds)) || daikyuSet.has(`${eb.id}_${ds}`)
-                if (offA && offB) pairHits.push({ ds, names: `${ea.name}・${eb.name}` })
+                if (!(offA && offB)) continue
+                const need = smallWeeks.has(weekKeyOf(ds)) ? BASE_NEED_SMALL : BASE_NEED_BIG
+                const am = dayCover[ds].am.length, pm = dayCover[ds].pm.length
+                if (am < need || pm < need) continue        // 不足＝下の赤バナーで報告
+                if (am > need && pm > need) continue        // 余裕あり＝警告不要
+                pairHits.push({ ds, names: `${ea.name}・${eb.name}`, am, pm, need })
             }
         }
         if (pairHits.length) {
-            const pl = pairHits.slice(0,12).map(p => `${p.ds.slice(5).replace('-','/')}（${p.names}）`).join('　/　')
-            dailyHtml += `<div style="border:2px solid #dc2626;background:#fef2f2;border-radius:10px;padding:10px 12px;margin-bottom:12px">
-                <div style="font-size:13px;font-weight:800;color:#dc2626">🚨 2人同時に休み ${pairHits.length}件（基準配置が崩れます）</div>
-                <div style="font-size:11px;color:#991b1b;margin-top:4px;line-height:1.6">この組み合わせが同じ日に揃って休むと、その日の基準配置を満たせなくなります。どちらかの休みをずらしてください。</div>
-                <div style="font-size:11px;color:#6b7280;margin-top:4px">${pl}${pairHits.length>12?'　他…':''}</div>
+            const pl = pairHits.slice(0,12).map(p => `${p.ds.slice(5).replace('-','/')}（${p.names}）午前${p.am}/午後${p.pm}名`).join('　/　')
+            dailyHtml += `<div style="border:2px solid #f59e0b;background:#fffbeb;border-radius:10px;padding:10px 12px;margin-bottom:12px">
+                <div style="font-size:13px;font-weight:800;color:#b45309">⚠️ 余裕のない日 ${pairHits.length}件（2人同時に休み）</div>
+                <div style="font-size:11px;color:#92400e;margin-top:4px;line-height:1.6">基準配置は<b>満たしていますが必要数ちょうど</b>です。もう1人休むと基準割れになります。急な休みが出たときの代わりを決めておいてください。</div>
+                <div style="font-size:11px;color:#6b7280;margin-top:4px">${pl}${pairHits.length>12?'　他…':''}　（必要${pairHits[0].need}名）</div>
             </div>`
         }
         if (dayShort.length) {
             const dl = dayShort.slice(0,14).map(d => `${d.ds.slice(5).replace('-','/')} ${d.half} ${d.n}/${d.need}名`).join('　/　')
             dailyHtml += `<div style="border:2px solid #dc2626;background:#fef2f2;border-radius:10px;padding:10px 12px;margin-bottom:12px">
                 <div style="font-size:13px;font-weight:800;color:#dc2626">🚨 基準配置が足りない時間帯 ${dayShort.length}件</div>
-                <div style="font-size:11px;color:#991b1b;margin-top:4px;line-height:1.6">午前・午後それぞれに<b>児発管を除いて所定の人数</b>が必要です（表の下2行の赤いセル）。</div>
+                <div style="font-size:11px;color:#991b1b;margin-top:4px;line-height:1.6">午前・午後それぞれに<b>児発管を除いて所定の人数</b>が必要です（表の下2行の赤いセル）。<br>
+                <b>有給・研修の人はその場にいないため頭数に入りません</b>（常勤換算の時間数には算入されますが、基準配置は別のルールです）。</div>
                 <div style="font-size:11px;color:#6b7280;margin-top:4px">${dl}${dayShort.length>14?'　他…':''}</div>
             </div>`
         }
@@ -1972,23 +1996,29 @@ async function loadAuditShifts() {
     if (optimizer && optWeekInfo.length) {
         const nk = optNikkinDays.size
         const half = auditDefaultOf(optimizer.name)
-        const senmonWeeks = optWeekInfo.filter(w => w.goal === 'senmon').length
-        const shortWeeks  = optWeekInfo.filter(w => w.short > 0)
+        const failWeeks = optWeekInfo.filter(w => !w.partial && w.shortLine > 0)   // 加配そのものが取れない
+        const tightWeeks = optWeekInfo.filter(w => !w.partial && w.shortLine <= 0 && w.shortBuf > 0)  // 取れるが余裕なし
         autoHtml += `<div style="font-size:11px;color:#4338ca;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:7px 11px;margin-top:8px;line-height:1.8">
             🔄 <b>${optimizer.name}</b>：週ごとに <b>日勤 計${nk}日</b> を自動配置しました（振替できる日 ${optAutoDays}日中）。残りは${half}勤務＝計画相談の時間です。<br>
             <span style="color:#6b7280">週の内訳：</span>`
         autoHtml += optWeekInfo.map(w => {
             const lbl = w.key.slice(5).replace('-','/')
+            if (w.partial) return `${lbl}〜 日勤${w.nikkin}/${w.autoN}日 <span style="color:#9ca3af">（月またぎ）</span>`
             const gl  = w.goal === 'senmon'
                 ? '<span style="color:#15803d;font-weight:700">専門まで</span>'
                 : '<span style="color:#b45309;font-weight:700">加配まで</span>'
             return `${lbl}〜 日勤${w.nikkin}/${w.autoN}日 ${gl}`
         }).join('　｜　')
         autoHtml += `<br><span style="font-size:10px;color:#6b7280">※専門加算に届かない週は加配加算ラインで止めて、${half}勤務（計画相談）をできるだけ残しています。セルを直接クリックすれば手動で上書きできます。</span>`
-        if (shortWeeks.length) {
-            const sl = shortWeeks.map(w => `${w.key.slice(5).replace('-','/')}〜 あと${w.short.toFixed(2)}人`).join('　/　')
-            autoHtml += `<br><span style="color:#b91c1c;font-weight:700">⚠️ ${optimizer.name}を全部日勤にしても加配加算に届かない週が ${shortWeeks.length}件：</span>${sl}
+        if (failWeeks.length) {
+            const sl = failWeeks.map(w => `${w.key.slice(5).replace('-','/')}〜 あと${w.shortLine.toFixed(2)}人`).join('　/　')
+            autoHtml += `<br><span style="color:#b91c1c;font-weight:800">🚨 ${optimizer.name}を全部日勤にしても<u>加配加算が取れない</u>週が ${failWeeks.length}件：</span>${sl}
                       <br>→ ①藤井・輪湖をこの事業所に入れる日を増やす　②他の職員の勤務日・勤務時間を増やす　のいずれかが必要です。`
+        }
+        if (tightWeeks.length) {
+            const tl = tightWeeks.map(w => `${w.key.slice(5).replace('-','/')}〜 あと${w.shortBuf.toFixed(2)}人で✅`).join('　/　')
+            autoHtml += `<br><span style="color:#b45309;font-weight:700">⚠️ 加配加算は<u>取れます</u>が余裕（+${PLACEMENT_BUFFER}人）がない週が ${tightWeeks.length}件：</span>${tl}
+                      <br><span style="font-size:10px;color:#6b7280">※急な休みや早退が1件出ると加算が落ちるラインです。${optimizer.name}の日勤はもう増やせないので、他の職員で補う必要があります。</span>`
         }
         autoHtml += `</div>`
     }
@@ -2058,6 +2088,10 @@ async function loadAuditShifts() {
                 const dw = d.getDay()
                 if (dw !== 0 && dw !== 6 && !HOLIDAYS.has(s)) { partial = true; break }  // 月外に平日がある
             }
+            // 実績は「まだ来ていない週」は判定しない（0人＝不足と誤解されるため）
+            const opDs = w.days.filter(d => operatingSet.has(d.ds)).map(d => d.ds)
+            const futureWk   = opDs.length > 0 && opDs[0] > todayStr2              // 週全体がこれから
+            const ongoingWk  = !futureWk && opDs[opDs.length-1] > todayStr2        // 週の途中
             // 判定：必要数＋余裕なら✅／必要数は満たすが余裕なし⚠️／不足❌
             const judge = (v, need) => partial ? { c:'#9ca3af', m:'－' }
                 : v >= need + PLACEMENT_BUFFER ? { c:'#15803d', m:'✅' }
@@ -2065,10 +2099,16 @@ async function loadAuditShifts() {
                 :                                { c:'#dc2626', m:'❌' }
             // 1セル（予定・実績を上下に）
             const cell = need => {
-                const jp = judge(planFTE, need), ja = judge(actualFTE, need)
+                const jp = judge(planFTE, need)
+                const actLine = futureWk
+                    ? `<div style="font-size:12px;font-weight:700;color:#9ca3af">－ <span style="font-size:10px">実績</span> 未到来</div>`
+                    : (() => {
+                        const ja = judge(actualFTE, need)
+                        return `<div style="font-size:13px;font-weight:800;color:${ongoingWk?'#9ca3af':ja.c}">${ongoingWk?'…':ja.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">実績</span> ${(actualFTE-need).toFixed(2)}</div>`
+                    })()
                 return `<td style="padding:5px 6px;text-align:center;white-space:nowrap;border-left:1px solid #eef2ff">
-                    <div style="font-size:13px;font-weight:800;color:${jp.c}">${jp.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">予定</span> ${(planFTE-need+0).toFixed(2)}</div>
-                    <div style="font-size:13px;font-weight:800;color:${ja.c}">${ja.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">実績</span> ${(actualFTE-need+0).toFixed(2)}</div>
+                    <div style="font-size:13px;font-weight:800;color:${jp.c}">${jp.m} <span style="font-size:10px;color:#9ca3af;font-weight:600">予定</span> ${(planFTE-need).toFixed(2)}</div>
+                    ${actLine}
                 </td>`
             }
             const wEnd = w.days[w.days.length - 1].ds
@@ -2084,7 +2124,7 @@ async function loadAuditShifts() {
                 <td style="padding:5px 6px;font-size:11px;text-align:center;color:#6b7280;white-space:nowrap">営業${opDays}日<br>1人=${stdHours}h</td>
                 <td style="padding:5px 6px;text-align:center;white-space:nowrap;background:#f8fafc">
                     <div style="font-size:13px;font-weight:800;color:#374151">予定 ${planFTE.toFixed(2)}人</div>
-                    <div style="font-size:13px;font-weight:800;color:#0369a1">実績 ${actualFTE.toFixed(2)}人</div>
+                    <div style="font-size:13px;font-weight:800;color:${futureWk?'#9ca3af':'#0369a1'}">実績 ${futureWk?'－':actualFTE.toFixed(2)+'人'+(ongoingWk?'<span style="font-size:9px;color:#9ca3af">(途中)</span>':'')}</div>
                 </td>
                 ${cell(baseNeed)}${cell(needKahai)}${cell(needSenmon)}
             </tr>`
