@@ -978,11 +978,11 @@ const PERSON_TIME = {
     '藤井': { capH: 14, capM: 0, otH: 18, otM: 0 },
     '輪湖': { capH: 9,  capM: 0, otH: 14, otM: 0 },
 }
-// 春夏勤務の個人別ルール（藤井・川平: 9:00〜16:30 ／ 名取: 9:00〜15:00）
+// 春夏勤務の個人別ルール（藤井・川平: 9:30〜16:30 ／ 名取: 9:30〜15:00）
 const PERSON_TIME_HARUNATSU = {
-    '藤井': { capH: 9, capM: 0, otH: 16, otM: 30 },
-    '川平': { capH: 9, capM: 0, otH: 16, otM: 30 },
-    '名取': { capH: 9, capM: 0, otH: 15, otM: 0 },
+    '藤井': { capH: 9, capM: 30, otH: 16, otM: 30 },
+    '川平': { capH: 9, capM: 30, otH: 16, otM: 30 },
+    '名取': { capH: 9, capM: 30, otH: 15, otM: 0 },
 }
 function workTimeRule(shiftType, name) {
     if (shiftType === '春夏') {
