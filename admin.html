@@ -1387,7 +1387,6 @@ let auditDividerId   = null
 const AUDIT_VIEW_ITEMS = [
     { key:'border', label:'🔵 手動設定セルの青枠',        note:'自動配置ではなく手で直したセルの目印' },
     { key:'kijun',  label:'⚠️ 人員配置基準の注意（赤枠）', note:'表の上に出る赤い覚え書き' },
-    { key:'fte',    label:'🏅 常勤換算チェック',           note:'加配加算の予定・実績と内訳' },
     { key:'daily',  label:'📆 1日ごとの基準配置チェック',   note:'表の下に午前・午後の配置人数を出す' },
     { key:'alerts', label:'⚠ 実績照合・ダブり勤務の警告',  note:'赤枠「!」オレンジ枠「⚠」セルの一覧' },
     { key:'auto',   label:'🔄 日勤の自動配置のお知らせ',   note:'「日勤◯日を自動配置しました」の行' },
@@ -2060,9 +2059,9 @@ async function loadAuditShifts() {
     }
 
     // 表示設定に従って合成（全部OFFならパネルごと消える）
+    // 月合計パネル（fteHtml）は週次・日次と重複するため表示しない（変数は算出のみ残す）
     const panelInner = (auditView.daily  ? dailyHtml  : '')
                      + (auditView.alerts ? alertsHtml : '')
-                     + (auditView.fte    ? fteHtml    : '')
                      + (auditView.auto   ? autoHtml   : '')
                      + (auditView.kennin ? kenninHtml : '')
     const panel = panelInner
@@ -2897,29 +2896,30 @@ async function approveFix(id) {
     } catch(e) { alert('エラー: ' + e.message) }
 }
 
+// 手動入力フォームは1つだけ開く（タブのように排他表示）
+const ADMIN_FORMS = ['admin-fix-form','admin-nak-form','admin-ykyuu-form','admin-daikyu-form']
+function openAdminForm(id) {
+    const target = document.getElementById(id)
+    const willShow = target.style.display === 'none'   // 今閉じているなら開く（開いていれば閉じる＝トグル）
+    ADMIN_FORMS.forEach(fid => { document.getElementById(fid).style.display = 'none' })
+    target.style.display = willShow ? 'block' : 'none'
+    return willShow
+}
+
 function toggleAdminFix() {
-    const f = document.getElementById('admin-fix-form')
-    const show = f.style.display === 'none'
-    f.style.display = show ? 'block' : 'none'
-    if (show) {
-        // 職員セレクトを更新
-        document.getElementById('afix-emp').innerHTML =
-            employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
-        document.getElementById('afix-date').value = new Date().toLocaleDateString('sv-SE')
-    }
+    if (!openAdminForm('admin-fix-form')) return
+    document.getElementById('afix-emp').innerHTML =
+        employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+    document.getElementById('afix-date').value = new Date().toLocaleDateString('sv-SE')
 }
 
 function toggleAdminNak() {
-    const f = document.getElementById('admin-nak-form')
-    const show = f.style.display === 'none'
-    f.style.display = show ? 'block' : 'none'
-    if (show) {
-        document.getElementById('anak-emp').innerHTML =
-            employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
-        document.getElementById('anak-date').value = new Date().toLocaleDateString('sv-SE')
-        document.getElementById('anak-start').value = ''
-        document.getElementById('anak-end').value   = ''
-    }
+    if (!openAdminForm('admin-nak-form')) return
+    document.getElementById('anak-emp').innerHTML =
+        employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+    document.getElementById('anak-date').value = new Date().toLocaleDateString('sv-SE')
+    document.getElementById('anak-start').value = ''
+    document.getElementById('anak-end').value   = ''
 }
 
 async function adminNakamuke() {
@@ -2986,15 +2986,11 @@ async function deleteShiftRequest() {
 
 // ---- 時間有給管理 ----
 function toggleAdminYkyuu() {
-    const f = document.getElementById('admin-ykyuu-form')
-    const show = f.style.display === 'none'
-    f.style.display = show ? 'block' : 'none'
-    if (show) {
-        document.getElementById('aykyuu-emp').innerHTML =
-            employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
-        document.getElementById('aykyuu-date').value = new Date().toLocaleDateString('sv-SE')
-        loadHourlyLeaveList()
-    }
+    if (!openAdminForm('admin-ykyuu-form')) return
+    document.getElementById('aykyuu-emp').innerHTML =
+        employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+    document.getElementById('aykyuu-date').value = new Date().toLocaleDateString('sv-SE')
+    loadHourlyLeaveList()
 }
 
 async function adminHourlyLeave() {
@@ -3080,15 +3076,11 @@ async function loadHourlyLeaveList() {
 
 // ===== 手動代休入力 =====
 function toggleAdminDaikyu() {
-    const f = document.getElementById('admin-daikyu-form')
-    const show = f.style.display === 'none'
-    f.style.display = show ? 'block' : 'none'
-    if (show) {
-        document.getElementById('adaikyu-emp').innerHTML =
-            employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
-        document.getElementById('adaikyu-date').value = new Date().toLocaleDateString('sv-SE')
-        loadDaikyuList()
-    }
+    if (!openAdminForm('admin-daikyu-form')) return
+    document.getElementById('adaikyu-emp').innerHTML =
+        employees.map(e => `<option value="${e.id}">${e.name}</option>`).join('')
+    document.getElementById('adaikyu-date').value = new Date().toLocaleDateString('sv-SE')
+    loadDaikyuList()
 }
 
 async function adminDaikyu() {
