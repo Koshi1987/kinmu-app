@@ -163,6 +163,16 @@
             #audit-tbl th:last-child, #audit-tbl td:last-child,
             #audit-tbl th:nth-last-child(2), #audit-tbl td:nth-last-child(2) { width: 7% !important; }
             .audit-panel { page-break-inside: avoid; margin-top: 8px !important; }
+            /* 週次 人員チェック等のパネル表：印刷で右側が見切れないよう折り返して用紙幅に収める */
+            #audit-tbl .audit-panel { overflow: visible !important; }
+            #audit-tbl .audit-panel div { overflow: visible !important; max-height: none !important; }
+            #audit-tbl .audit-panel table { width: 100% !important; table-layout: fixed !important; font-size: 7pt !important; }
+            #audit-tbl .audit-panel th, #audit-tbl .audit-panel td {
+                overflow: visible !important; white-space: normal !important; word-break: break-word !important;
+                padding: 1px 2px !important; min-width: 0 !important;
+            }
+            /* パネル内の見出し・注意書きも折り返す */
+            #audit-tbl .audit-panel > div { white-space: normal !important; }
             /* 全員分まとめて印刷：コンテナのみ表示 */
             body.printing-all > *:not(#print-all-container) { display: none !important; }
             body.printing-all #print-all-container { display: block !important; }
@@ -1498,6 +1508,11 @@ async function loadAuditShifts() {
     const yNum = parseInt(year), mNum = parseInt(mon)
     const lastDay = new Date(yNum, mNum, 0).getDate()
     const from = `${month}-01`, to = `${month}-${String(lastDay).padStart(2,'0')}`
+    // 週次チェックを月またぎでも計算できるよう、月に重なる「完全な週（月〜日）」全体を取得対象にする。
+    // 表示（グリッド）は今月分だけ／週の集計だけ前後の月の日を含める。
+    const qFrom = weekKeyOf(from)                                    // 月初の週の月曜
+    const qToD = new Date(weekKeyOf(to) + 'T00:00:00'); qToD.setDate(qToD.getDate() + 6)
+    const qTo = qToD.toLocaleDateString('sv-SE')                    // 月末の週の日曜
 
     document.getElementById('audit-month-label').textContent = `${year}年${mon}月`
     document.getElementById('pn-audit').textContent = `常勤換算 勤務形態一覧表 ${year}年${mon}月　印刷日時: ${new Date().toLocaleString('ja-JP')}`
@@ -1519,7 +1534,7 @@ async function loadAuditShifts() {
         orderRow = (ord && ord[0]) || null
     } catch(e) {}
 
-    const { data: aud } = await db.from('audit_shifts').select('*').gte('date', from).lte('date', to)
+    const { data: aud } = await db.from('audit_shifts').select('*').gte('date', qFrom).lte('date', qTo)
     const auditMap = {}          // このタブ（事業所）のシフト
     const dualByTeam = {}        // 兼務者の事業所別シフト { empId_date: { teamId: shift_type } }
     for (const s of aud || []) {
@@ -1553,7 +1568,7 @@ async function loadAuditShifts() {
     }
 
     // 予定シフト（有休・休み・春夏など承認済み）を自動下書きのベースに取得
-    const { data: planData } = await db.from('shifts').select('*').gte('date', from).lte('date', to)
+    const { data: planData } = await db.from('shifts').select('*').gte('date', qFrom).lte('date', qTo)
     const overrideMap = {}
     for (const s of planData || []) if (s.shift_type) overrideMap[`${s.employee_id}_${s.date}`] = s.shift_type
     const empByName = sub => employees.find(e => e.name.includes(sub))
@@ -1561,13 +1576,13 @@ async function loadAuditShifts() {
     // 実績照合＋実績累計用：実際の打刻（全件）と承認済み有休・中抜け
     const todayStr2 = new Date().toLocaleDateString('sv-SE')
     const [{ data: attData }, { data: leaveData }, { data: nakData }, { data: daikyuData }] = await Promise.all([
-        db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp'),
+        db.from('attendance').select('*').gte('date', qFrom).lte('date', qTo).order('timestamp'),
         db.from('shift_requests').select('employee_id,date').eq('status','approved')
-            .in('requested_type',['有給','AM有休','PM有休','時間有給','研修']).gte('date', from).lte('date', to),
+            .in('requested_type',['有給','AM有休','PM有休','時間有給','研修']).gte('date', qFrom).lte('date', qTo),
         db.from('shift_requests').select('employee_id,date,reason').eq('status','approved')
-            .eq('requested_type','中抜け').gte('date', from).lte('date', to),
+            .eq('requested_type','中抜け').gte('date', qFrom).lte('date', qTo),
         db.from('shift_requests').select('employee_id,date,requested_hours').eq('status','approved')
-            .eq('requested_type','代休').gte('date', from).lte('date', to)
+            .eq('requested_type','代休').gte('date', qFrom).lte('date', qTo)
     ])
     const clockedSet = new Set((attData || []).filter(r => r.type === 'clock_in').map(r => `${r.employee_id}_${r.date}`))
     const leaveSet   = new Set((leaveData || []).map(r => `${r.employee_id}_${r.date}`))
@@ -1590,11 +1605,13 @@ async function loadAuditShifts() {
     const conflicts = []
     const dupConflicts = []   // 兼務者の同日ダブり勤務
 
+    // 日付配列：月に重なる完全な週（qFrom〜qTo）。inMonth=今月の日だけ表示・月集計に使う
     const days = []
-    for (let d = 1; d <= lastDay; d++) {
-        const date = new Date(yNum, mNum-1, d)
-        days.push({ d, dow: date.getDay(), ds: `${month}-${String(d).padStart(2,'0')}` })
+    for (let dt = new Date(qFrom + 'T00:00:00'); dt <= qToD; dt.setDate(dt.getDate() + 1)) {
+        const ds = dt.toLocaleDateString('sv-SE')
+        days.push({ d: dt.getDate(), dow: dt.getDay(), ds, inMonth: ds >= from && ds <= to })
     }
+    const monthColN = days.filter(x => x.inMonth).length + 3   // 名前 + 今月の日数 + 予定/実績
 
     // 監査は月単位で見るため、表示・常勤換算は月全体（6/1〜）で算出
     const hasOldPeriod = from < AUDIT_START  // 6/10以前（旧タイムカード期間）を含む月か
@@ -1609,8 +1626,11 @@ async function loadAuditShifts() {
     }
     let operatingDays = 0
     const operatingSet = new Set()   // 稼働日（週次チェックの基準時間もこれを使う＝お盆休業などを自動除外）
-    for (const { dow, ds } of days) {
-        if (displayEmps.some(e => WORKING_TYPES.includes(simpleAuditSt(e, dow, ds)))) { operatingDays++; operatingSet.add(ds) }
+    for (const { dow, ds, inMonth } of days) {
+        if (displayEmps.some(e => WORKING_TYPES.includes(simpleAuditSt(e, dow, ds)))) {
+            operatingSet.add(ds)          // 週の基準時間には月またぎの日も含める
+            if (inMonth) operatingDays++  // 月の稼働日数（月の常勤換算列に使う）は今月分だけ
+        }
     }
     const reqFTE = operatingDays * 8
 
@@ -1648,7 +1668,8 @@ async function loadAuditShifts() {
     const isGroupMember = nm => groupMembers.some(k => nm.includes(k))
 
     let hdr = '<th style="min-width:78px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:12px;padding:4px">名前</th>'
-    for (const { d, dow, ds } of days) {
+    for (const { d, dow, ds, inMonth } of days) {
+        if (!inMonth) continue   // グリッドは今月分だけ表示
         const isHol = HOLIDAYS.has(ds)
         const bg = (dow===0||isHol)?'#fee2e2':dow===6?'#dbeafe':'#f8fafc'
         hdr += `<th style="background:${bg};min-width:34px;text-align:center;font-size:12px;padding:3px 2px">${d}<br>${['日','月','火','水','木','金','土'][dow]}</th>`
@@ -1665,16 +1686,8 @@ async function loadAuditShifts() {
                    || displayEmps.find(e => e.name.includes('坂上'))
     let optAutoDays = 0            // 日勤に振り替えられる日数（休・有給・手動設定の日は振替不可）
     const optWeekInfo = []         // 週ごとの結果（メッセージ用）
-    // 月をまたぐ週（月外に平日がある週）はこの月の分しか集計できないので判定を出さない
-    const isPartialWeek = wkKey => {
-        for (let i = 0; i < 7; i++) {
-            const d = new Date(wkKey); d.setDate(d.getDate() + i)
-            const s = d.toLocaleDateString('sv-SE')
-            if (s >= from && s <= to) continue
-            if (d.getDay() !== 0 && d.getDay() !== 6 && !HOLIDAYS.has(s)) return true
-        }
-        return false
-    }
+    // 月に重なる完全な週（qFrom〜qTo）を取得しているため、すべての週を判定できる
+    const isPartialWeek = wkKey => false
     // この事業所が専門加算を狙うか（リーノ2は狙わない＝加配ラインで止める）
     const optTeamKey = teamHas('池内') ? 'リーノ2' : teamHas('坂上') ? 'リーノ1' : ''
     const takesSenmon = !!SITE_TAKES_SENMON[optTeamKey]
@@ -1769,7 +1782,7 @@ async function loadAuditShifts() {
         let empHours = 0, halfDay = 0, nikkin = 0
         const myDays = new Set()   // この事業所に配置されている日（兼務者の実績を二重計上しないため）
         const effByDs = {}         // その日の実効勤務形態（実績側の集計で使う）
-        for (const { dow, ds } of days) {
+        for (const { dow, ds, inMonth } of days) {
             const key = `${emp.id}_${ds}`
             // 予定シフトをベースに自動下書き（有休・休み・春夏・変則などはそのまま反映）
             const planSt = planShiftOf(emp, dow, ds, overrideMap)
@@ -1795,7 +1808,7 @@ async function loadAuditShifts() {
             const dispSt = isDaikyu ? '代休' : (isHolWork ? '休日出勤' : st)
             const bg = isDaikyu ? '#e0f2fe' : (isHolWork ? '#dbeafe' : (SHIFT_COLORS[st] || '#fff'))
             const dayH = auditHours(effSt, isNonReg, emp.name)
-            empHours += dayH  // 代休は0h。児発管も時間数は集計（換算対象外）
+            if (inMonth) empHours += dayH  // 月の常勤換算列は今月分だけ（代休は0h）
             effByDs[ds] = effSt
             if (WORKING_TYPES.includes(effSt)) myDays.add(ds)
             // 週ごとの非常勤グループ時間（予定）を集計 ※月パネル用
@@ -1810,17 +1823,17 @@ async function loadAuditShifts() {
                 if (COVER_AM.includes(effSt)) dayCover[ds].am.push(emp.name)
                 if (COVER_PM.includes(effSt)) dayCover[ds].pm.push(emp.name)
             }
-            if (effSt === '午前' || effSt === '午後') halfDay++
-            if (effSt === '日勤') nikkin++
+            if (inMonth && (effSt === '午前' || effSt === '午後')) halfDay++
+            if (inMonth && effSt === '日勤') nikkin++
             // 実績照合：過去日に「監査=勤務」なのに 有休あり or 打刻なし → 要確認（赤枠）※代休・休日出勤は対象外
             let conflict = false
-            if (!isJihatsu && !isDaikyu && ds >= AUDIT_START && ds < todayStr2 && WORKING_TYPES.includes(st) && (leaveSet.has(key) || !clockedSet.has(key))) {
+            if (inMonth && !isJihatsu && !isDaikyu && ds >= AUDIT_START && ds < todayStr2 && WORKING_TYPES.includes(st) && (leaveSet.has(key) || !clockedSet.has(key))) {
                 conflict = true
                 conflicts.push({ name: emp.name, ds, reason: leaveSet.has(key) ? '有休あり' : '打刻なし' })
             }
             // ダブり勤務チェック：兼務者が同じ日に両方の事業所で勤務になっている
             const dupWork = !!otherTeamName && WORKING_TYPES.includes(st)
-            if (dupWork) dupConflicts.push({ name: emp.name, ds, other: otherTeamName })
+            if (inMonth && dupWork) dupConflicts.push({ name: emp.name, ds, other: otherTeamName })
             const ring = dupWork ? 'box-shadow:inset 0 0 0 3px #ea580c;'
                        : conflict ? 'box-shadow:inset 0 0 0 2px #dc2626;'
                        : (isOv && auditView.border ? 'box-shadow:inset 0 0 0 2px #6366f1;' : '')
@@ -1829,7 +1842,7 @@ async function loadAuditShifts() {
             const f = dispSt.length>=4?8:dispSt.length===3?9:11
             const tip = dupWork ? `⚠ ダブり勤務：同じ日に「${otherTeamName}」でも勤務が入っています`
                       : conflict ? ('要確認: 実績と相違（'+(leaveSet.has(key)?'有休あり':'打刻なし')+'）') : ''
-            cells += `<td onclick="showAuditPicker('${emp.id}','${ds}','${st}',this)" title="${tip}" style="background:${bg};text-align:center;font-size:${f}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;${ring}user-select:none">${dispSt}${mark}</td>`
+            if (inMonth) cells += `<td onclick="showAuditPicker('${emp.id}','${ds}','${st}',this)" title="${tip}" style="background:${bg};text-align:center;font-size:${f}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;${ring}user-select:none">${dispSt}${mark}</td>`
         }
         const fte = empHours / reqFTE
         if (isReg) regulars.push({ name: emp.name, fte })
@@ -1843,7 +1856,7 @@ async function loadAuditShifts() {
         let actualCum = 0
         const inGroup = isNonReg && isGroupMember(emp.name)
         const isDual  = isDualStaff(emp.name)
-        for (const { dow, ds } of days) {
+        for (const { dow, ds, inMonth } of days) {
             if (ds > todayStr2) break
             if (isDual && !myDays.has(ds)) continue   // 兼務者は「この事業所に配置した日」の実績だけ計上
             const recs = attByKey[`${emp.id}_${ds}`]
@@ -1866,17 +1879,19 @@ async function loadAuditShifts() {
                 regular = Math.min(regular, declared)
             }
             if (regular <= 0) continue
-            actualCum += regular
-            if (inGroup) { const wk = weekKeyOf(ds); weekActual[wk] = (weekActual[wk] || 0) + regular }
-            if (countsForPlacement(emp.name)) {
-                const wk = weekKeyOf(ds); weekAllActual[wk] = (weekAllActual[wk] || 0) + regular
+            const wk = weekKeyOf(ds)
+            if (inMonth) {
+                actualCum += regular   // 月の実績累計列は今月分だけ
+                if (inGroup) weekActual[wk] = (weekActual[wk] || 0) + regular
             }
+            // 週次の実績は月またぎの日も含める
+            if (countsForPlacement(emp.name)) weekAllActual[wk] = (weekAllActual[wk] || 0) + regular
         }
         if (inGroup) nonRegActual += actualCum
         cells += `<td style="background:#f0f9ff;text-align:center;font-size:11px;padding:3px 4px;font-weight:700;color:#0369a1">${actualCum > 0 ? actualCum.toFixed(1) + 'h' : '-'}</td>`
         rows += `<tr>${cells}</tr>`
         if (dividerAfterId && String(emp.id) === String(dividerAfterId)) {
-            rows += `<tr><td colspan="${days.length + 3}" style="padding:0;border-top:3px double #1e3a8a;border-bottom:3px double #1e3a8a;background:#eef2ff">
+            rows += `<tr><td colspan="${monthColN}" style="padding:0;border-top:3px double #1e3a8a;border-bottom:3px double #1e3a8a;background:#eef2ff">
                 <div style="position:sticky;left:0;display:inline-block;padding:5px 10px;font-size:12px;font-weight:800;color:#1e3a8a;letter-spacing:1px">加算要件対象</div>
             </td></tr>`
         }
@@ -1887,7 +1902,8 @@ async function loadAuditShifts() {
         for (const half of ['am','pm']) {
             const lbl = half === 'am' ? '午前 配置' : '午後 配置'
             let c = `<td style="position:sticky;left:0;background:#f8fafc;z-index:1;padding:4px 8px;font-size:11px;font-weight:700;color:#374151;white-space:nowrap;border-top:2px solid #cbd5e1">${lbl}<br><span style="font-size:9px;color:#9ca3af">児発管除く</span></td>`
-            for (const { dow, ds } of days) {
+            for (const { dow, ds, inMonth } of days) {
+                if (!inMonth) continue   // グリッドは今月分だけ
                 const need = (smallWeeks.has(weekKeyOf(ds)) ? BASE_NEED_SMALL : BASE_NEED_BIG)
                 const n = dayCover[ds][half].length
                 if (!operatingSet.has(ds)) {
@@ -1904,7 +1920,7 @@ async function loadAuditShifts() {
         }
     }
     // 勤務時間の凡例
-    rows += `<tr><td colspan="${days.length + 3}" style="font-size:11px;padding:6px 10px;background:#f8fafc;color:#374151;border-top:2px solid #cbd5e1;white-space:normal">${AUDIT_LEGEND}</td></tr>`
+    rows += `<tr><td colspan="${monthColN}" style="font-size:11px;padding:6px 10px;background:#f8fafc;color:#374151;border-top:2px solid #cbd5e1;white-space:normal">${AUDIT_LEGEND}</td></tr>`
 
     const table = `<div style="overflow-x:auto"><table style="border-collapse:collapse;background:white;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07)"><thead><tr>${hdr}</tr></thead><tbody>${rows}</tbody></table></div>`
 
@@ -2110,16 +2126,9 @@ async function loadAuditShifts() {
             const bankHours  = planHours - floorNeed * stdHours   // 今の方針を維持できる貯金（予定）
             const bankActual = actHours  - floorNeed * stdHours   // 同・実績
             const bankKahai  = planHours - needKahai * stdHours   // 加配だけは死守する床までの貯金
-            // 月をまたぐ週は「この月に入っている日」しか集計できないため判定を出さない。
-            // ただし月外にあるのが土日祝だけなら営業日は全部この月に入っているので、通常どおり判定する。
-            let partial = false
-            for (let i = 0; i < 7; i++) {
-                const d = new Date(w.key); d.setDate(d.getDate() + i)
-                const s = d.toLocaleDateString('sv-SE')
-                if (s >= from && s <= to) continue          // 表示中の月の中の日
-                const dw = d.getDay()
-                if (dw !== 0 && dw !== 6 && !HOLIDAYS.has(s)) { partial = true; break }  // 月外に平日がある
-            }
+            // 完全な週を取得しているのですべて判定可能。月をまたぐ週は情報として印だけ付ける。
+            const partial = false
+            const crossMonth = w.days.some(d => d.ds < from || d.ds > to)
             // 実績は「まだ来ていない週」は判定しない（0人＝不足と誤解されるため）
             const opDs = w.days.filter(d => operatingSet.has(d.ds)).map(d => d.ds)
             const futureWk   = opDs.length > 0 && opDs[0] > todayStr2              // 週全体がこれから
@@ -2162,7 +2171,7 @@ async function loadAuditShifts() {
             const lbl = `${w.key.slice(5).replace('-','/')}〜${wEnd.slice(5).replace('-','/')}`
             const harunatsu = w.days.some(d => isHarunatsuPeriod(d.ds))
             wRows += `<tr style="border-bottom:1px solid #e5e7eb;${partial?'background:#fafafa':''}">
-                <td style="padding:5px 8px;font-size:12px;font-weight:600;white-space:nowrap">${lbl}${harunatsu?'<br><span style="font-size:9px;color:#0369a1">春夏期間</span>':''}${partial?'<br><span style="font-size:9px;color:#9ca3af">※月またぎ・判定なし</span>':''}</td>
+                <td style="padding:5px 8px;font-size:12px;font-weight:600;white-space:nowrap">${lbl}${harunatsu?'<br><span style="font-size:9px;color:#0369a1">春夏期間</span>':''}${crossMonth?'<br><span style="font-size:9px;color:#9ca3af">↔ 月またぎ（前後の月と共通）</span>':''}</td>
                 <td style="padding:5px 8px;text-align:center">
                     <label style="font-size:11px;cursor:pointer;white-space:nowrap">
                         <input type="checkbox" ${isSmall?'checked':''} onchange="toggleWeekCapacity('${w.key}',this.checked)" style="cursor:pointer"> 10人以下
@@ -2206,7 +2215,7 @@ async function loadAuditShifts() {
                 ${role.kahai ? `加配の担い手：<b>${role.kahai}</b>／専門の担い手：<b>${role.senmon}</b><br>` : ''}
                 <b style="color:${teamTakesSenmon ? '#15803d' : '#b45309'}">この事業所の方針：加配加算は取る${teamTakesSenmon ? '／専門的支援体制加算も取る' : '／専門的支援体制加算は<u>狙わない</u>（③欄は参考表示）'}</b><br>
                 <b style="color:#92400e">🐷 貯金時間</b>＝${teamTakesSenmon ? '専門' : '加配'}加算を維持したまま<b>早上がり・欠勤で減らせる残り時間</b>です。「今日は○時間早く上がってOK」の判断に使えます（プラスのうちは加算を維持できます）。<br>
-                <span style="color:#9ca3af">※月をまたぐ週は、この月に入っている日しか集計できないため判定を出しません。前後の月のタブで確認してください。</span>
+                <span style="color:#9ca3af">※月をまたぐ週（↔印）も前後の月の日を含めて計算しています。同じ週は前後どちらの月のタブでも同じ結果が出ます。</span>
             </div>
             <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;background:white;border-radius:8px">
                 <thead><tr style="background:#eef2ff">
