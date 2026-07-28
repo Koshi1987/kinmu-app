@@ -2281,10 +2281,9 @@ function monthsUpTo(endMonth) {
 // この月を手動でロック（現在の所属を写真保存）
 async function lockRosterMonth(month) {
     if (!confirm(`${month} の在籍を今の所属でロックしますか？\n（以後この月は職員移動の影響を受けません）`)) return
-    try {
-        await db.from('roster_lock').upsert({ month, assignments: currentAssignments() }, { onConflict: 'month' })
-        loadAuditShifts()
-    } catch(e) { alert('エラー: ' + e.message + '\n\nroster_lock テーブルが作成されているか確認してください。') }
+    const { error } = await db.from('roster_lock').upsert({ month, assignments: currentAssignments() }, { onConflict: 'month' })
+    if (error) { alert('ロックに失敗しました：' + error.message + '\n\nroster_lock テーブルが作成されているか確認してください。'); return }
+    loadAuditShifts()
 }
 
 // この月の在籍を手で修正（写真の値をそのまま表示。触った所だけ変わる。現在の所属を勝手にコピーしない）
@@ -2323,10 +2322,9 @@ async function editRosterLock(month) {
     ov.querySelector('#re-save').onclick = async () => {
         const a = {}
         ov.querySelectorAll('[data-emp]').forEach(s => { a[s.dataset.emp] = parseInt(s.value) })
-        try {
-            await db.from('roster_lock').upsert({ month, assignments: a }, { onConflict: 'month' })
-            ov.remove(); loadAuditShifts()
-        } catch(e) { alert('エラー: ' + e.message) }
+        const { error } = await db.from('roster_lock').upsert({ month, assignments: a }, { onConflict: 'month' })
+        if (error) { alert('保存に失敗しました：' + error.message); return }
+        ov.remove(); loadAuditShifts()
     }
 }
 
@@ -2829,29 +2827,35 @@ function promptMoveTeam(empId, newTeamId) {
 
 async function doMoveTeam(empId, newTeamId, effMonth, newTeamName) {
     const emp = employees.find(e => String(e.id) === String(empId))
-    try {
-        // 1. 移動月より前の月を、まだロックが無ければ現在（移動前）の所属で自動ロック
-        const targetMonths = monthsUpTo(effMonth)          // AUDIT_START〜effMonthの前月まで
-        let frozen = 0
-        if (targetMonths.length) {
-            const { data: existing } = await db.from('roster_lock').select('month').in('month', targetMonths)
-            const have = new Set((existing || []).map(r => r.month))
-            const snap = currentAssignments()               // 移動前の所属
-            const rows = targetMonths.filter(m => !have.has(m)).map(m => ({ month: m, assignments: snap }))
-            if (rows.length) { await db.from('roster_lock').insert(rows); frozen = rows.length }
-        }
-        // 2. 所属を変更
-        const { error } = await db.from('employees').update({ team_id: newTeamId }).eq('id', empId)
-        if (error) throw error
-        emp.team_id = newTeamId
-        const nt = teams.find(t => t.id === newTeamId)
-        if (emp.teams && nt) emp.teams.name = nt.name
-        showMsg('emp-msg', `${emp.name} を「${newTeamName}」に移動しました（${effMonth}から）✓　過去${frozen}か月分を自動ロック`, true)
-        renderEmployees()
-    } catch(e) {
-        alert('エラー: ' + e.message + '\n\nroster_lock テーブルが作成されているか確認してください。')
-        renderEmployees()
+    // ★まず roster_lock テーブルが使えるか確認。使えないなら移動を中止（保護できないまま動かさない）
+    const probe = await db.from('roster_lock').select('month').limit(1)
+    if (probe.error) {
+        alert('在籍ロック用テーブル（roster_lock）がまだ作られていないため、移動を中止しました。\n\n先にSupabaseでSQLを実行してください。過去を守れないまま所属を変えないための安全策です。')
+        renderEmployees(); return
     }
+    // 1. 移動月より前の月を、まだロックが無ければ現在（移動前）の所属で自動ロック
+    const targetMonths = monthsUpTo(effMonth)          // AUDIT_START〜effMonthの前月まで
+    let frozen = 0
+    if (targetMonths.length) {
+        const { data: existing, error: selErr } = await db.from('roster_lock').select('month').in('month', targetMonths)
+        if (selErr) { alert('ロック確認に失敗したため移動を中止しました：' + selErr.message); renderEmployees(); return }
+        const have = new Set((existing || []).map(r => r.month))
+        const snap = currentAssignments()               // 移動前の所属
+        const rows = targetMonths.filter(m => !have.has(m)).map(m => ({ month: m, assignments: snap }))
+        if (rows.length) {
+            const { error: insErr } = await db.from('roster_lock').insert(rows)
+            if (insErr) { alert('自動ロックに失敗したため移動を中止しました（所属は変えていません）：\n' + insErr.message); renderEmployees(); return }
+            frozen = rows.length
+        }
+    }
+    // 2. ロックが確実にできてから所属を変更
+    const { error } = await db.from('employees').update({ team_id: newTeamId }).eq('id', empId)
+    if (error) { alert('所属変更でエラー：' + error.message); renderEmployees(); return }
+    emp.team_id = newTeamId
+    const nt = teams.find(t => t.id === newTeamId)
+    if (emp.teams && nt) emp.teams.name = nt.name
+    showMsg('emp-msg', `${emp.name} を「${newTeamName}」に移動しました（${effMonth}から）✓　過去${frozen}か月分を自動ロック`, true)
+    renderEmployees()
 }
 
 async function updateDefaultShift(empId, newShift) {
