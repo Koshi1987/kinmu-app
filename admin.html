@@ -1051,6 +1051,14 @@ async function loadShiftsMonthly() {
         if (s.shift_type) overrideMap[`${s.employee_id}_${s.date}`] = s.shift_type
     }
 
+    // 在籍ロック（監査タブと同じ。過去の所属を固定＝異動しても過去のシフト表は動かない）
+    let lockAssign = null
+    try {
+        const { data: lk } = await db.from('roster_lock').select('assignments').eq('month', month)
+        if (lk && lk[0]) lockAssign = lk[0].assignments || null
+    } catch(e) {}
+    const teamOfS = e => (lockAssign && lockAssign[e.id] != null) ? Number(lockAssign[e.id]) : e.team_id
+
     // 休日出勤・代休のラベルは全タブ共通で表示 → 打刻と代休は常に取得
     let attMap = {}, nakMap = {}, leaveHrsMap = {}, daikyuMap = {}
     const [{ data: attData }, { data: daikyuData }] = await Promise.all([
@@ -1089,7 +1097,7 @@ async function loadShiftsMonthly() {
     }
 
     const displayEmps = teamFilter === 'all' ? employees :
-        employees.filter(e => e.team_id === parseInt(teamFilter))
+        employees.filter(e => teamOfS(e) === parseInt(teamFilter))
 
     const days = []
     for (let d = 1; d <= lastDay; d++) {
@@ -1148,7 +1156,7 @@ async function loadShiftsMonthly() {
     const elapsedWeekdays = countWeekdaysExclHol(yNum, mNum, elapsedDay)
     let rows = ''
     for (const team of teams) {
-        const te = displayEmps.filter(e => e.team_id === team.id)
+        const te = displayEmps.filter(e => teamOfS(e) === team.id)
         if (!te.length) continue
         if (teamFilter === 'all') {
             rows += `<tr class="team-row"><td colspan="${colCount}">${team.name}</td></tr>`
@@ -2830,7 +2838,10 @@ async function doMoveTeam(empId, newTeamId, effMonth, newTeamName) {
     // ★まず roster_lock テーブルが使えるか確認。使えないなら移動を中止（保護できないまま動かさない）
     const probe = await db.from('roster_lock').select('month').limit(1)
     if (probe.error) {
-        alert('在籍ロック用テーブル（roster_lock）がまだ作られていないため、移動を中止しました。\n\n先にSupabaseでSQLを実行してください。過去を守れないまま所属を変えないための安全策です。')
+        alert('在籍ロック用テーブル（roster_lock）にアクセスできないため、移動を中止しました。\n\n'
+            + '［エラー内容］' + (probe.error.message || '不明') + '\n'
+            + (probe.error.code ? '［コード］' + probe.error.code + '\n' : '')
+            + '\n過去を守れないまま所属を変えないための安全策です。\nSupabaseで grant と notify pgrst のSQLを実行してください。')
         renderEmployees(); return
     }
     // 1. 移動月より前の月を、まだロックが無ければ現在（移動前）の所属で自動ロック
