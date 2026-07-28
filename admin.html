@@ -1524,8 +1524,18 @@ async function loadAuditShifts() {
     if (prev) filterEl.value = prev
     else { const r2 = employees.find(e => e.name.includes('池内')); if (r2) filterEl.value = r2.team_id }
     const teamId = parseInt(filterEl.value)
+
+    // ===== 在籍ロック（この月に誰がどの事業所にいたかのスナップショット）=====
+    // ロックがあればその月はロック時点の所属で集計。無ければ現在の所属（＝異動がなければ常に正しい）。
+    let lockAssign = null
+    try {
+        const { data: lk } = await db.from('roster_lock').select('assignments').eq('month', month)
+        if (lk && lk[0]) lockAssign = lk[0].assignments || null
+    } catch(e) {}
+    const teamOf = e => (lockAssign && lockAssign[e.id] != null) ? Number(lockAssign[e.id]) : e.team_id
+    const monthLocked = !!lockAssign
     // 兼務職員（藤井・輪湖）は両事業所のタブに表示する
-    const displayEmps = employees.filter(e => e.team_id === teamId || isDualStaff(e.name))
+    const displayEmps = employees.filter(e => teamOf(e) === teamId || isDualStaff(e.name))
 
     // 表示順（アプリ内で並べ替えた設定。無ければ AUDIT_ROSTER を使う）
     let orderRow = null
@@ -1563,7 +1573,7 @@ async function loadAuditShifts() {
         }
         const st = mine !== undefined ? mine
                  : otherWorkTeam      ? '休'
-                 : (emp.team_id === teamId ? draft : '休')
+                 : (teamOf(emp) === teamId ? draft : '休')
         return { st, isOv: mine !== undefined, otherWorkTeam }
     }
 
@@ -2233,7 +2243,91 @@ async function loadAuditShifts() {
         </div>`
     }
 
-    document.getElementById('audit-tbl').innerHTML = table + panel + weekPanel
+    // ===== 在籍ロックの状態バー =====
+    const lockBar = monthLocked
+        ? `<div class="no-print" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:8px 12px;margin-bottom:10px">
+             <span style="font-size:13px;font-weight:700;color:#15803d">🔒 ${year}年${mon}月は在籍ロック済み</span>
+             <span style="font-size:11px;color:#6b7280">この月は当時の所属で固定。今後の職員移動で数字は変わりません。</span>
+             <button onclick="editRosterLock('${month}')" style="margin-left:auto;font-size:12px;font-weight:700;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:5px 10px;border-radius:8px;cursor:pointer">✏️ この月の在籍を修正</button>
+           </div>`
+        : `<div class="no-print" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:8px 12px;margin-bottom:10px">
+             <span style="font-size:13px;font-weight:700;color:#6b7280">🔓 ${year}年${mon}月は未ロック（現在の所属で表示中）</span>
+             <span style="font-size:11px;color:#9ca3af">職員移動をすると、この月は自動でロックされ当時の配置が保存されます。</span>
+             <button onclick="lockRosterMonth('${month}')" style="margin-left:auto;font-size:12px;font-weight:700;color:#15803d;background:#f0fdf4;border:1px solid #86efac;padding:5px 10px;border-radius:8px;cursor:pointer">🔒 この月の在籍をロック</button>
+           </div>`
+
+    document.getElementById('audit-tbl').innerHTML = lockBar + table + panel + weekPanel
+}
+
+// 現在の全職員の所属マップ { empId: team_id } を作る
+function currentAssignments() {
+    const a = {}
+    for (const e of employees) a[e.id] = e.team_id
+    return a
+}
+// 監査開始月からの月リスト（'YYYY-MM'）を返す（endMonth を含まない）
+function monthsUpTo(endMonth) {
+    const [sy, sm] = AUDIT_START.slice(0,7).split('-').map(Number)
+    const [ey, em] = endMonth.split('-').map(Number)
+    const out = []
+    let y = sy, m = sm
+    while (y < ey || (y === ey && m < em)) {
+        out.push(`${y}-${String(m).padStart(2,'0')}`)
+        m++; if (m > 12) { m = 1; y++ }
+    }
+    return out
+}
+
+// この月を手動でロック（現在の所属を写真保存）
+async function lockRosterMonth(month) {
+    if (!confirm(`${month} の在籍を今の所属でロックしますか？\n（以後この月は職員移動の影響を受けません）`)) return
+    try {
+        await db.from('roster_lock').upsert({ month, assignments: currentAssignments() }, { onConflict: 'month' })
+        loadAuditShifts()
+    } catch(e) { alert('エラー: ' + e.message + '\n\nroster_lock テーブルが作成されているか確認してください。') }
+}
+
+// この月の在籍を手で修正（写真の値をそのまま表示。触った所だけ変わる。現在の所属を勝手にコピーしない）
+async function editRosterLock(month) {
+    let cur = {}
+    try {
+        const { data } = await db.from('roster_lock').select('assignments').eq('month', month)
+        cur = (data && data[0] && data[0].assignments) || currentAssignments()
+    } catch(e) { cur = currentAssignments() }
+    const old = document.getElementById('roster-edit')
+    if (old) old.remove()
+    const ov = document.createElement('div')
+    ov.id = 'roster-edit'
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px'
+    const rows = employees.map(e => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9">
+            <span style="flex:1;font-size:13px;font-weight:600">${e.name}</span>
+            <select data-emp="${e.id}" style="padding:4px 8px;border:1px solid #d1d5db;border-radius:7px;font-size:12px">
+                ${teams.map(t => `<option value="${t.id}"${Number(cur[e.id])===t.id?' selected':''}>${t.name}</option>`).join('')}
+            </select>
+        </div>`).join('')
+    ov.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:440px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3)">
+        <div style="padding:16px 20px 8px">
+            <div style="font-size:16px;font-weight:800;color:#b45309">✏️ ${month} の在籍を修正</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.7">表示は保存済みの当時の所属です。<b>触ったところだけ変わります。</b>他の月・現在の設定には影響しません。</div>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:0 20px">${rows}</div>
+        <div style="padding:12px 20px 16px;display:flex;gap:8px;border-top:1px solid #e5e7eb">
+            <button id="re-save" style="flex:1;padding:11px;background:#1e3a8a;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">保存する</button>
+            <button id="re-cancel" style="padding:11px 14px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">閉じる</button>
+        </div>
+    </div>`
+    document.body.appendChild(ov)
+    ov.querySelector('#re-cancel').onclick = () => ov.remove()
+    ov.onclick = ev => { if (ev.target === ov) ov.remove() }
+    ov.querySelector('#re-save').onclick = async () => {
+        const a = {}
+        ov.querySelectorAll('[data-emp]').forEach(s => { a[s.dataset.emp] = parseInt(s.value) })
+        try {
+            await db.from('roster_lock').upsert({ month, assignments: a }, { onConflict: 'month' })
+            ov.remove(); loadAuditShifts()
+        } catch(e) { alert('エラー: ' + e.message) }
+    }
 }
 
 // ===== 監査タブ 表示設定（印刷時に何を載せるか） =====
@@ -2448,7 +2542,7 @@ async function resetAuditShift(empId, date) {
 }
 
 // ---- バックアップ ----
-const BACKUP_TABLES = ['teams','employees','attendance','shifts','shift_requests','audit_shifts','week_capacity','audit_order']
+const BACKUP_TABLES = ['teams','employees','attendance','shifts','shift_requests','audit_shifts','week_capacity','audit_order','roster_lock']
 
 async function downloadBackup() {
     const btn = document.getElementById('backup-btn')
@@ -2505,7 +2599,7 @@ function renderEmployees() {
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <label style="font-size:12px;color:#6b7280;white-space:nowrap">所属:</label>
-                    <select onchange="updateEmployeeTeam('${emp.id}',this.value)"
+                    <select onchange="promptMoveTeam('${emp.id}',this.value)"
                         style="padding:5px 10px;border:1.5px solid #bae6fd;border-radius:8px;font-size:13px;background:#eff6ff;cursor:pointer;font-weight:600;color:#1e3a8a">
                         ${teams.map(t => `<option value="${t.id}"${emp.team_id===t.id?' selected':''}>${t.name}</option>`).join('')}
                     </select>
@@ -2699,21 +2793,65 @@ async function updateRole(empId, role) {
     showMsg('emp-msg', '役職を「' + (role || '未設定') + '」に更新しました ✓', true)
 }
 
-// 職員の所属チームを変更（リーノ1↔リーノ2の移動）
-async function updateEmployeeTeam(empId, newTeamId) {
-    const emp = employees.find(e => e.id === empId)
+// 職員の所属チームを変更（リーノ1↔リーノ2の移動）。移動月を選ばせ、それより前の月は自動でロック（当時の所属で固定）
+function promptMoveTeam(empId, newTeamId) {
+    const emp = employees.find(e => String(e.id) === String(empId))
     const newTeam = teams.find(t => String(t.id) === String(newTeamId))
-    if (!emp || !newTeam) return
-    if (!confirm(`${emp.name} さんの所属を「${newTeam.name}」に変更しますか？`)) {
-        renderEmployees()  // キャンセル時はプルダウンを元に戻すため再描画
-        return
+    if (!emp || !newTeam) { renderEmployees(); return }
+    if (emp.team_id === parseInt(newTeamId)) return   // 変更なし
+    const nowM = new Date().toLocaleDateString('sv-SE').slice(0, 7)
+    const old = document.getElementById('move-dlg')
+    if (old) old.remove()
+    const ov = document.createElement('div')
+    ov.id = 'move-dlg'
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px'
+    ov.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:400px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.3);padding:18px 20px">
+        <div style="font-size:16px;font-weight:800;color:#1e3a8a">${emp.name} を「${newTeam.name}」へ移動</div>
+        <div style="font-size:12px;color:#6b7280;margin:8px 0 4px;line-height:1.7">いつから移動しますか？<br>指定した月より<b>前の月は当時の所属（${emp.teams?.name||''}）で自動ロック</b>され、数字は変わりません。</div>
+        <label style="font-size:12px;color:#374151;font-weight:600">移動する月</label><br>
+        <input type="month" id="move-month" value="${nowM}" style="margin-top:4px;padding:8px 10px;border:1.5px solid #d1d5db;border-radius:8px;font-size:14px;width:100%">
+        <div style="display:flex;gap:8px;margin-top:16px">
+            <button id="move-ok" style="flex:1;padding:11px;background:#1e3a8a;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">この月から移動する</button>
+            <button id="move-cancel" style="padding:11px 14px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">やめる</button>
+        </div>
+    </div>`
+    document.body.appendChild(ov)
+    const close = () => { ov.remove(); renderEmployees() }
+    ov.querySelector('#move-cancel').onclick = close
+    ov.onclick = ev => { if (ev.target === ov) close() }
+    ov.querySelector('#move-ok').onclick = async () => {
+        const eff = document.getElementById('move-month').value
+        if (!eff) return alert('移動する月を選んでください')
+        ov.remove()
+        await doMoveTeam(empId, parseInt(newTeamId), eff, newTeam.name)
     }
-    const { error } = await db.from('employees').update({ team_id: parseInt(newTeamId) }).eq('id', empId)
-    if (error) { alert('エラー: ' + error.message); renderEmployees(); return }
-    emp.team_id = parseInt(newTeamId)
-    if (emp.teams) emp.teams.name = newTeam.name
-    showMsg('emp-msg', `${emp.name} を「${newTeam.name}」に移動しました ✓`, true)
-    renderEmployees()
+}
+
+async function doMoveTeam(empId, newTeamId, effMonth, newTeamName) {
+    const emp = employees.find(e => String(e.id) === String(empId))
+    try {
+        // 1. 移動月より前の月を、まだロックが無ければ現在（移動前）の所属で自動ロック
+        const targetMonths = monthsUpTo(effMonth)          // AUDIT_START〜effMonthの前月まで
+        let frozen = 0
+        if (targetMonths.length) {
+            const { data: existing } = await db.from('roster_lock').select('month').in('month', targetMonths)
+            const have = new Set((existing || []).map(r => r.month))
+            const snap = currentAssignments()               // 移動前の所属
+            const rows = targetMonths.filter(m => !have.has(m)).map(m => ({ month: m, assignments: snap }))
+            if (rows.length) { await db.from('roster_lock').insert(rows); frozen = rows.length }
+        }
+        // 2. 所属を変更
+        const { error } = await db.from('employees').update({ team_id: newTeamId }).eq('id', empId)
+        if (error) throw error
+        emp.team_id = newTeamId
+        const nt = teams.find(t => t.id === newTeamId)
+        if (emp.teams && nt) emp.teams.name = nt.name
+        showMsg('emp-msg', `${emp.name} を「${newTeamName}」に移動しました（${effMonth}から）✓　過去${frozen}か月分を自動ロック`, true)
+        renderEmployees()
+    } catch(e) {
+        alert('エラー: ' + e.message + '\n\nroster_lock テーブルが作成されているか確認してください。')
+        renderEmployees()
+    }
 }
 
 async function updateDefaultShift(empId, newShift) {
