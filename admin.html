@@ -535,7 +535,7 @@ const SHIFT_HOURS = {
 // 個人別の勤務時間上書き（川平: 午後14:00〜17:30=3.5h ／ 輪湖: 午前9:00〜14:00=5h
 //  春夏: 藤井・川平 9:00〜16:30=7.5h ／ 名取 9:00〜15:00=6h。藤井の平日は14:00〜18:00=4hで標準どおり）
 const PERSON_SHIFT_HOURS = {
-    '川平': { '午後': 3.75, '春夏': 7 },   // 午後14:00〜17:45／春夏9:30〜16:30=7h
+    '川平': { '午後': 3.5, '春夏': 7 },   // 午後14:00〜17:30／春夏9:30〜16:30=7h
     '藤井': { '春夏': 7 },                  // 春夏9:30〜16:30=7h
     '輪湖': { '午前': 5 },
     '名取': { '春夏': 5.5 },                // 春夏9:30〜15:00=5.5h
@@ -548,7 +548,7 @@ function shiftHoursFor(name, st) {
 
 // 個人別の勤務時間ルール（開始キャップ・残業起算時刻）。川平・藤井は14:00開始、川平は17:30から残業、輪湖は9:00開始・14:00から残業
 const PERSON_TIME = {
-    '川平': { capH: 14, capM: 0, otH: 17, otM: 45 },   // 14:00〜17:45
+    '川平': { capH: 14, capM: 0, otH: 17, otM: 30 },   // 14:00〜17:30
     '藤井': { capH: 14, capM: 0, otH: 18, otM: 0 },
     '輪湖': { capH: 9,  capM: 0, otH: 14, otM: 0 },
 }
@@ -1052,11 +1052,7 @@ async function loadShiftsMonthly() {
     }
 
     // 在籍ロック（監査タブと同じ。過去の所属を固定＝異動しても過去のシフト表は動かない）
-    let lockAssign = null
-    try {
-        const { data: lk } = await db.from('roster_lock').select('assignments').eq('month', month)
-        if (lk && lk[0]) lockAssign = lk[0].assignments || null
-    } catch(e) {}
+    const lockAssign = await snapshotFor(month)
     const teamOfS = e => (lockAssign && lockAssign[e.id] != null) ? Number(lockAssign[e.id]) : e.team_id
 
     // 休日出勤・代休のラベルは全タブ共通で表示 → 打刻と代休は常に取得
@@ -1125,7 +1121,7 @@ async function loadShiftsMonthly() {
         hdr += `<th style="background:#fce7f3;min-width:58px;text-align:center;font-size:11px;padding:3px 4px;color:#9d174d;font-weight:700">実勤務<br><span style="font-size:9px">有休除</span></th>`
     }
 
-    const LEGEND = `【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30（輪湖 9:00〜14:00）　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:45）　5.春夏勤務 8:30〜16:30（藤井・川平 9:30〜16:30／名取 9:30〜15:00）　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
+    const LEGEND = `【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30（輪湖 9:00〜14:00）　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:30）　5.春夏勤務 8:30〜16:30（藤井・川平 9:30〜16:30／名取 9:30〜15:00）　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）`
     const today = new Date().toLocaleDateString('sv-SE')
 
     const TARGET_NAMES = TARGET_NAMES_CHECK  // 上部で定義済み
@@ -1480,7 +1476,7 @@ const AUDIT_ROSTER = [
     // リーノ2（池内のいる事業所）
     { keys: ['越原','舘石','池内','川平','藤井','輪湖','大野','名取','藤沢'], dividerAfter: '輪湖' },
 ]
-const AUDIT_LEGEND = '【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30（輪湖 9:00〜14:00）　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:45）　5.春夏勤務 8:30〜16:30（藤井・川平 9:30〜16:30／名取 9:30〜15:00）　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）'
+const AUDIT_LEGEND = '【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30（輪湖 9:00〜14:00）　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:30）　5.春夏勤務 8:30〜16:30（藤井・川平 9:30〜16:30／名取 9:30〜15:00）　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）'
 
 function empTypeOf(name)     { for (const k in EMP_TYPE) if (name.includes(k)) return EMP_TYPE[k]; return '常勤' }
 // EMP_TYPE に登録が無い職員は既定で「常勤（1.00人）」として算入されてしまうため検出する
@@ -1490,7 +1486,7 @@ function isAuditKennin(name) { return AUDIT_KENNIN.some(k => name.includes(k)) }
 function auditHours(st, isNonReg, name = '') {
     const paidLeave = ['有給','AM有休','PM有休','時間有給']
     if (isNonReg && paidLeave.includes(st)) return 0  // 非常勤は有休を勤務時間に算入しない
-    return shiftHoursFor(name, st)  // 個人別上書き（川平 午後3.75h）対応
+    return shiftHoursFor(name, st)  // 個人別上書き（川平 午後3.5h）対応
 }
 function getAuditMonth() {
     const now = new Date()
@@ -1534,12 +1530,10 @@ async function loadAuditShifts() {
     const teamId = parseInt(filterEl.value)
 
     // ===== 在籍ロック（この月に誰がどの事業所にいたかのスナップショット）=====
-    // ロックがあればその月はロック時点の所属で集計。無ければ現在の所属（＝異動がなければ常に正しい）。
-    let lockAssign = null
-    try {
-        const { data: lk } = await db.from('roster_lock').select('assignments').eq('month', month)
-        if (lk && lk[0]) lockAssign = lk[0].assignments || null
-    } catch(e) {}
+    //   ・その月のロックがあればそれを使う
+    //   ・一番古いロックより前の月は、その最古ロックと同じ所属で扱う（過去がずっと守られる）
+    //   ・一番新しいロックより後（＝現在・未来）は、今の所属で表示（異動がなければ常に正しい）
+    const lockAssign = await snapshotFor(month)
     const teamOf = e => (lockAssign && lockAssign[e.id] != null) ? Number(lockAssign[e.id]) : e.team_id
     const monthLocked = !!lockAssign
     // 兼務職員（藤井・輪湖）は両事業所のタブに表示する
@@ -2273,6 +2267,22 @@ function currentAssignments() {
     for (const e of employees) a[e.id] = e.team_id
     return a
 }
+// その月に適用すべき在籍スナップショット（assignments）を返す。無ければ null（＝現在の所属で表示）
+//   ・その月のロックがあればそれ
+//   ・一番古いロックより前の月は、その最古ロックを適用（過去がずっと守られる）
+//   ・一番新しいロックより後（現在・未来）は null
+async function snapshotFor(month) {
+    let rows
+    try { rows = (await db.from('roster_lock').select('month,assignments')).data || [] }
+    catch(e) { return null }
+    if (!rows.length) return null
+    const exact = rows.find(r => r.month === month)
+    if (exact) return exact.assignments || null
+    let earliest = null
+    for (const r of rows) if (!earliest || r.month < earliest.month) earliest = r
+    if (earliest && month < earliest.month) return earliest.assignments || null
+    return null
+}
 // 監査開始月からの月リスト（'YYYY-MM'）を返す（endMonth を含まない）
 function monthsUpTo(endMonth) {
     const [sy, sm] = AUDIT_START.slice(0,7).split('-').map(Number)
@@ -2286,21 +2296,18 @@ function monthsUpTo(endMonth) {
     return out
 }
 
-// この月を手動でロック（現在の所属を写真保存）
+// この月を手動でロック（今この月に表示されている所属をそのまま写真保存）
 async function lockRosterMonth(month) {
-    if (!confirm(`${month} の在籍を今の所属でロックしますか？\n（以後この月は職員移動の影響を受けません）`)) return
-    const { error } = await db.from('roster_lock').upsert({ month, assignments: currentAssignments() }, { onConflict: 'month' })
+    if (!confirm(`${month} の在籍を今の状態でロックしますか？\n（以後この月は職員移動の影響を受けません）`)) return
+    const snap = (await snapshotFor(month)) || currentAssignments()   // 表示中の所属を保存（現在の所属を勝手に使わない）
+    const { error } = await db.from('roster_lock').upsert({ month, assignments: snap }, { onConflict: 'month' })
     if (error) { alert('ロックに失敗しました：' + error.message + '\n\nroster_lock テーブルが作成されているか確認してください。'); return }
     loadAuditShifts()
 }
 
-// この月の在籍を手で修正（写真の値をそのまま表示。触った所だけ変わる。現在の所属を勝手にコピーしない）
+// この月の在籍を手で修正（今表示されている所属を初期値に。触った所だけ変わる。現在の所属を勝手にコピーしない）
 async function editRosterLock(month) {
-    let cur = {}
-    try {
-        const { data } = await db.from('roster_lock').select('assignments').eq('month', month)
-        cur = (data && data[0] && data[0].assignments) || currentAssignments()
-    } catch(e) { cur = currentAssignments() }
+    let cur = (await snapshotFor(month)) || currentAssignments()
     const old = document.getElementById('roster-edit')
     if (old) old.remove()
     const ov = document.createElement('div')
