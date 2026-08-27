@@ -1424,7 +1424,7 @@ const AUDIT_KENNIN = ['坂上','池内']  // 計画相談兼任（日勤多す�
 const WORKING_TYPES = ['日勤','午前','午後','変則','春夏']  // 実働の勤務形態
 const DUAL_STAFF = ['藤井','輪湖']   // リーノ1・2 両方に応援に入る職員（両タブに表示）
 const isDualStaff = name => DUAL_STAFF.some(k => name && name.includes(k))
-const AUDIT_SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','休']
+const AUDIT_SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','時間有給','研修','休']
 const AUDIT_START = '2026-06-11'  // 勤務表の使用開始日（これより前は監査用も無記入・集計対象外）
 // 春夏期間（この期間は常勤1人＝1日7時間で換算）
 const HARUNATSU_FROM = '2026-07-27', HARUNATSU_TO = '2026-08-12'
