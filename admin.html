@@ -1484,9 +1484,16 @@ function isKnownEmp(name)    { return Object.keys(EMP_TYPE).some(k => name && na
 function auditDefaultOf(name){ for (const k in AUDIT_DEFAULT) if (name.includes(k)) return AUDIT_DEFAULT[k]; return '日勤' }
 function isAuditKennin(name) { return AUDIT_KENNIN.some(k => name.includes(k)) }
 function auditHours(st, isNonReg, name = '') {
-    const paidLeave = ['有給','AM有休','PM有休','時間有給']
-    if (isNonReg && paidLeave.includes(st)) return 0  // 非常勤は有休を勤務時間に算入しない
-    return shiftHoursFor(name, st)  // 個人別上書き（川平 午後3.5h）対応
+    if (isNonReg) {
+        // 非常勤：全日有休・時間有休は換算に入れない（0）
+        if (st === '有給' || st === '時間有給') return 0
+        // 半休は「働いた半日分」を算入。休んだ半日は除外。表示は AM/PM有休 のまま残る
+        //   PM有休＝午後休み→午前働く（名取・藤沢 4.5h／輪湖 5h 等、その人の午前勤務）
+        //   AM有休＝午前休み→午後働く（その人の午後勤務。川平 3.5h 等）
+        if (st === 'PM有休') return shiftHoursFor(name, '午前')
+        if (st === 'AM有休') return shiftHoursFor(name, '午後')
+    }
+    return shiftHoursFor(name, st)  // 個人別上書き（川平 午後3.5h）対応。常勤の有休は全日8h算入
 }
 function getAuditMonth() {
     const now = new Date()
