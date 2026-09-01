@@ -3564,8 +3564,10 @@ async function buildEmpMonthlyHTML(emp, month) {
         const { label: leaveLabel, mins: leaveMins } = calcLeave(leaveByDate[ds])
         const { label: nakLabel,  mins: nakMins }    = calcNakamuke(nakamByDate[ds])
         const shiftType = shiftByDate[ds] || emp.default_shift || '日勤'
-        const workedMins = calcMins(recs, shiftType, emp.name)
+        const early = earlyByDate[ds] || null
         const holidayWork = isHolidayDay(ds, dow) && !!ci
+        // 休日出勤は打刻どおり／平日は開始キャップ＋早出残業を反映
+        const workedMins = holidayWork ? calcHolidayMins(recs) : calcMins(recs, shiftType, emp.name, early)
         const daikyu = daikyuByDate[ds]
         const daikyuMins = daikyu ? (daikyu.requested_hours || 0) * 60 : 0
         const fullDayLeave = leaveByDate[ds] && ['有給','研修'].includes(leaveByDate[ds].requested_type)
