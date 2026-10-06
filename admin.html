@@ -511,7 +511,7 @@ const { createClient } = window.supabase
 const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 let employees = [], teams = [], pendingMap = {}
-let weekOffset = 0, shiftMonthOffset = 0
+let shiftMonthOffset = 0
 
 const SHIFT_TYPES = ['日勤','午前','午後','変則','有給','AM有休','PM有休','時間有給','春夏','研修','休']
 const SHIFT_COLORS = {
@@ -532,6 +532,31 @@ const SHIFT_HOURS = {
     '日勤':8, '午前':4.5, '午後':4, '変則':7, '春夏':8,
     '有給':8, 'AM有休':8, 'PM有休':8, '時間有給':8, '研修':8, '休':0
 }
+// ===========================================================================
+// 【重要】フルネーム → 判定キー（姓）の対応表
+//   勤務ルール・児発管判定・並び順などは、下の各設定で「姓」をキーにしています。
+//   以前は「名前に姓が含まれるか（部分一致）」で判定していたため、同姓の別人
+//   （例：小野ゆり が辞めて 小野恵 が入る）や、姓が名前の一部に偶然含まれる人を
+//   巻き込む恐れがありました。この表に載っている【登録済みのフルネーム】だけを
+//   正式な対象とし、未登録の人は特別ルールに当たらない（＝標準扱い）ようにします。
+//
+//   ★新しい職員が特別ルール（勤務時間・児発管・並び順など）に該当する場合は、
+//     ここに「'フルネーム（スペース無し）': '姓キー'」を1行足してください。
+//     該当しない一般職員は、ここに足さなくてもそのまま標準ルールで動きます。
+// ===========================================================================
+const NAME_KEY = {
+    '越原由依':'越原', '小野ゆり':'小野', '小澤夢乃':'小澤', '梅内峰宏':'梅内',
+    '中野愛':'中野',   '藤井ゆみ':'藤井', '舘石鈴夏':'舘石', '池内泰恵':'池内',
+    '大野可奈':'大野', '名取ゆき絵':'名取', '藤沢知美':'藤沢', '輪湖美佳':'輪湖',
+    '川平邦子':'川平', '坂上伶奈':'坂上',
+}
+// 名前を判定キーに変換する。登録済みフルネームならその姓キー、未登録なら
+// スペースを除いた本人の名前をそのまま返す（＝どの特別ルールにも一致しない）。
+function nameKey(name) {
+    const n = (name || '').replace(/[\s　]/g, '')
+    return NAME_KEY[n] || n
+}
+
 // 個人別の勤務時間上書き（川平: 午後14:00〜17:30=3.5h ／ 輪湖: 午前9:00〜14:00=5h
 //  春夏: 藤井・川平 9:00〜16:30=7.5h ／ 名取 9:00〜15:00=6h。藤井の平日は14:00〜18:00=4hで標準どおり）
 const PERSON_SHIFT_HOURS = {
@@ -541,8 +566,8 @@ const PERSON_SHIFT_HOURS = {
     '名取': { '春夏': 5.5 },                // 春夏9:30〜15:00=5.5h
 }
 function shiftHoursFor(name, st) {
-    for (const k in PERSON_SHIFT_HOURS)
-        if (name && name.includes(k) && PERSON_SHIFT_HOURS[k][st] != null) return PERSON_SHIFT_HOURS[k][st]
+    const k = nameKey(name)
+    if (PERSON_SHIFT_HOURS[k] && PERSON_SHIFT_HOURS[k][st] != null) return PERSON_SHIFT_HOURS[k][st]
     return SHIFT_HOURS[st] || 0
 }
 
@@ -560,11 +585,12 @@ const PERSON_TIME_HARUNATSU = {
 }
 // その日の勤務時間ルールを返す（春夏の個人別＞春夏標準＞個人別＞標準）
 function workTimeRule(shiftType, name) {
+    const k = nameKey(name)
     if (shiftType === '春夏') {
-        for (const k in PERSON_TIME_HARUNATSU) if (name && name.includes(k)) return PERSON_TIME_HARUNATSU[k]
+        if (PERSON_TIME_HARUNATSU[k]) return PERSON_TIME_HARUNATSU[k]
         return { capH: 8, capM: 30, otH: 16, otM: 30 }
     }
-    for (const k in PERSON_TIME) if (name && name.includes(k)) return PERSON_TIME[k]
+    if (PERSON_TIME[k]) return PERSON_TIME[k]
     return { capH: 9, capM: 0, otH: 18, otM: 0 }  // 標準：9:00開始・18:00残業
 }
 // ===== 早出残業（9時前勤務）=====
@@ -944,58 +970,6 @@ async function loadRecords() {
         </table>`
 }
 
-// ---- 週間集計 ----
-function getWeekDays(offset) {
-    const now = new Date(), dow = now.getDay()
-    const mon = new Date(now)
-    mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1) + offset * 7)
-    mon.setHours(0, 0, 0, 0)
-    return Array.from({length: 7}, (_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return d })
-}
-
-async function loadWeekly() {
-    const days = getWeekDays(weekOffset)
-    const from = days[0].toLocaleDateString('sv-SE')
-    const to   = days[6].toLocaleDateString('sv-SE')
-    const wkLbl = `${days[0].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})} 〜 ${days[6].toLocaleDateString('ja-JP',{month:'short',day:'numeric'})}`
-    document.getElementById('week-label').textContent = wkLbl
-    document.getElementById('pn-weekly').textContent  = `週間集計 ${wkLbl}　印刷日時: ${new Date().toLocaleString('ja-JP')}`
-
-    const { data: att } = await db.from('attendance').select('*').gte('date', from).lte('date', to).order('timestamp')
-    const dayHdrs = days.map(d =>
-        `<th style="text-align:center">${['日','月','火','水','木','金','土'][d.getDay()]}<br><small>${d.getDate()}日</small></th>`
-    ).join('')
-
-    let rows = '', totals = new Array(7).fill(0), grandTotal = 0
-
-    for (const team of teams) {
-        const te = employees.filter(e => e.team_id === team.id)
-        if (!te.length) continue
-        rows += `<tr class="team-row"><td colspan="9">${team.name}</td></tr>`
-        for (const emp of te) {
-            const ea = (att || []).filter(r => r.employee_id === emp.id)
-            let weekSum = 0
-            const cells = days.map((d, i) => {
-                const ds   = d.toLocaleDateString('sv-SE')
-                const recs = ea.filter(r => r.date === ds).sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp))
-                const m    = calcMins(recs)
-                weekSum   += m; totals[i] += m
-                return `<td style="text-align:center">${m > 0 ? toHHMM(m) : '-'}</td>`
-            }).join('')
-            grandTotal += weekSum
-            rows += `<tr><td>${emp.name}</td>${cells}<td style="text-align:center;font-weight:700">${weekSum > 0 ? toHHMM(weekSum) : '-'}</td></tr>`
-        }
-    }
-
-    document.getElementById('weekly-tbl').innerHTML = `
-        <table>
-            <thead><tr><th>名前</th>${dayHdrs}<th style="text-align:center">週合計</th></tr></thead>
-            <tbody>${rows}</tbody>
-        </table>`
-}
-
-function changeWeek(d) { weekOffset += d; loadWeekly() }
-
 // ---- シフト表 ----
 function getShiftMonth() {
     const now = new Date()
@@ -1103,7 +1077,7 @@ async function loadShiftsMonthly() {
 
     const TARGET_NAMES_CHECK = ['川平', '藤沢', '名取']
     const hasTargetEmps = teamFilter !== 'all' &&
-        displayEmps.some(e => TARGET_NAMES_CHECK.some(n => e.name.includes(n)))
+        displayEmps.some(e => TARGET_NAMES_CHECK.includes(nameKey(e.name)))
     const colCount = teamFilter === 'all' ? lastDay + 3 : hasTargetEmps ? lastDay + 5 : lastDay + 4
     let hdr = '<th style="min-width:72px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:13px">名前</th>'
     for (const { d, dow, ds } of days) {
@@ -1159,9 +1133,9 @@ async function loadShiftsMonthly() {
         }
         // 並び順は全タブ共通。「加算要件対象」区切りはチーム別タブのみ表示
         let teOrdered = te, dividerAfterName = null
-        const cfg = ROSTER_CONFIG.find(c => c.keys.some(k => te.some(e => e.name.includes(k))))
+        const cfg = ROSTER_CONFIG.find(c => c.keys.some(k => te.some(e => nameKey(e.name) === k)))
         if (cfg) {
-            const idx = nm => { const i = cfg.keys.findIndex(k => nm.includes(k)); return i === -1 ? 999 : i }
+            const idx = nm => { const i = cfg.keys.indexOf(nameKey(nm)); return i === -1 ? 999 : i }
             teOrdered = [...te].sort((a, b) => idx(a.name) - idx(b.name))
             if (teamFilter !== 'all') dividerAfterName = cfg.dividerAfter
         }
@@ -1225,19 +1199,19 @@ async function loadShiftsMonthly() {
                     style="background:${cellBg};text-align:center;font-size:${stFont}px;line-height:1.1;cursor:pointer;padding:3px 1px;border:1px solid #f0f0f0;user-select:none;white-space:normal;word-break:break-word">${dispSt}${arrow}</td>`
             }
 
-            const isTarget = TARGET_NAMES_CHECK.some(n => emp.name.includes(n))
+            const isTarget = TARGET_NAMES_CHECK.includes(nameKey(emp.name))
             if (isTarget) targetEmpHours[emp.name] = totalHoursExcLeave  // 175hチェックは有休除きで判定
             // 常勤加算スロットへ加算（常勤①②③は有休込み、合算組は有休除き）
             KASAN_SLOTS.forEach((slot, i) => {
-                if (slot.members.some(n => emp.name.includes(n))) {
+                if (slot.members.includes(nameKey(emp.name))) {
                     slotHours[i] = (slotHours[i] || 0) + (slot.exclLeave ? totalHoursExcLeave : totalHours)
                     slotHasMember[i] = true
                 }
             })
             // 計画相談 内訳用に各人の総勤務時間を捕捉
-            if (emp.name.includes('坂上')) sakagamiTotal = totalHours
-            if (emp.name.includes('藤井')) fujiiTotal    = totalHours
-            if (emp.name.includes('池内')) ikeuchiTotal  = totalHours
+            if (nameKey(emp.name) === '坂上') sakagamiTotal = totalHours
+            if (nameKey(emp.name) === '藤井') fujiiTotal    = totalHours
+            if (nameKey(emp.name) === '池内') ikeuchiTotal  = totalHours
             const weeklyAvg = (totalHours / (lastDay / 7)).toFixed(1)
             const totalDisp = teamFilter === 'all'
                 ? `${totalHours}h`
@@ -1256,7 +1230,7 @@ async function loadShiftsMonthly() {
                 }
             }
             rows += `<tr>${cells}</tr>`
-            if (dividerAfterName && emp.name.includes(dividerAfterName)) {
+            if (dividerAfterName && nameKey(emp.name) === dividerAfterName) {
                 rows += `<tr><td colspan="${colCount}" style="padding:0;border-top:3px double #1e3a8a;border-bottom:3px double #1e3a8a;background:#eef2ff">
                     <div style="position:sticky;left:0;display:inline-block;padding:5px 10px;font-size:12px;font-weight:800;color:#1e3a8a;letter-spacing:1px">加算要件対象</div>
                 </td></tr>`
@@ -1423,7 +1397,7 @@ const AUDIT_DEFAULT = {
 const AUDIT_KENNIN = ['坂上','池内']  // 計画相談兼任（日勤多すぎチェック対象）
 const WORKING_TYPES = ['日勤','午前','午後','変則','春夏']  // 実働の勤務形態
 const DUAL_STAFF = ['藤井','輪湖']   // リーノ1・2 両方に応援に入る職員（両タブに表示）
-const isDualStaff = name => DUAL_STAFF.some(k => name && name.includes(k))
+const isDualStaff = name => DUAL_STAFF.includes(nameKey(name))
 const AUDIT_SHIFT_TYPES = ['日勤','午前','午後','変則','春夏','有給','AM有休','PM有休','時間有給','研修','休']
 const AUDIT_START = '2026-06-11'  // 勤務表の使用開始日（これより前は監査用も無記入・集計対象外）
 // 春夏期間（この期間は常勤1人＝1日7時間で換算）
@@ -1447,7 +1421,7 @@ const PLACEMENT_BUFFER = 0.2   // この余裕がないと「ぎりぎり」警�
 // 配置の常勤換算に数えない職員（児発管は別途 EMP_TYPE で除外）
 const PLACEMENT_EXCLUDE = []
 const countsForPlacement = name =>
-    empTypeOf(name) !== '児発管' && !PLACEMENT_EXCLUDE.some(k => name && name.includes(k))
+    empTypeOf(name) !== '児発管' && !PLACEMENT_EXCLUDE.includes(nameKey(name))
 // 事業所ごとに専門的支援体制加算を狙うか（所長方針）
 //   リーノ1＝狙う／リーノ2＝狙わない（専門担当の藤沢が夏休みに休むため常勤換算1人を作れない）
 const SITE_TAKES_SENMON = { 'リーノ1': true, 'リーノ2': false }
@@ -1478,11 +1452,11 @@ const AUDIT_ROSTER = [
 ]
 const AUDIT_LEGEND = '【勤務時間】　1.日勤 9:00〜18:00　2.午前勤務 9:00〜13:30（輪湖 9:00〜14:00）　3.変則勤務 9:00〜17:00　4.午後勤務 14:00〜18:00（川平 14:00〜17:30）　5.春夏勤務 8:30〜16:30（藤井・川平 9:30〜16:30／名取 9:30〜15:00）　6.休み　7.有給（8時間勤務扱）　8.有給（4時間勤務扱）'
 
-function empTypeOf(name)     { for (const k in EMP_TYPE) if (name.includes(k)) return EMP_TYPE[k]; return '常勤' }
+function empTypeOf(name)     { return EMP_TYPE[nameKey(name)] || '常勤' }
 // EMP_TYPE に登録が無い職員は既定で「常勤（1.00人）」として算入されてしまうため検出する
-function isKnownEmp(name)    { return Object.keys(EMP_TYPE).some(k => name && name.includes(k)) }
-function auditDefaultOf(name){ for (const k in AUDIT_DEFAULT) if (name.includes(k)) return AUDIT_DEFAULT[k]; return '日勤' }
-function isAuditKennin(name) { return AUDIT_KENNIN.some(k => name.includes(k)) }
+function isKnownEmp(name)    { return EMP_TYPE[nameKey(name)] !== undefined }
+function auditDefaultOf(name){ return AUDIT_DEFAULT[nameKey(name)] || '日勤' }
+function isAuditKennin(name) { return AUDIT_KENNIN.includes(nameKey(name)) }
 function auditHours(st, isNonReg, name = '') {
     if (isNonReg) {
         // 非常勤：全日有休・時間有休は換算に入れない（0）
@@ -1533,7 +1507,7 @@ async function loadAuditShifts() {
     const prev = filterEl.value
     filterEl.innerHTML = teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('')
     if (prev) filterEl.value = prev
-    else { const r2 = employees.find(e => e.name.includes('池内')); if (r2) filterEl.value = r2.team_id }
+    else { const r2 = employees.find(e => nameKey(e.name) === '池内'); if (r2) filterEl.value = r2.team_id }
     const teamId = parseInt(filterEl.value)
 
     // ===== 在籍ロック（この月に誰がどの事業所にいたかのスナップショット）=====
@@ -1590,7 +1564,7 @@ async function loadAuditShifts() {
     const { data: planData } = await db.from('shifts').select('*').gte('date', qFrom).lte('date', qTo)
     const overrideMap = {}
     for (const s of planData || []) if (s.shift_type) overrideMap[`${s.employee_id}_${s.date}`] = s.shift_type
-    const empByName = sub => employees.find(e => e.name.includes(sub))
+    const empByName = sub => employees.find(e => nameKey(e.name) === sub)
 
     // 実績照合＋実績累計用：実際の打刻（全件）と承認済み有休・中抜け
     const todayStr2 = new Date().toLocaleDateString('sv-SE')
@@ -1657,7 +1631,7 @@ async function loadAuditShifts() {
     // 並び順の定義を選ぶ：藤井・輪湖は両事業所に出るので「1人でも一致」だと別の事業所の並びを拾ってしまう。
     // 一致した人数が最も多い定義を採用する。
     const cfg = AUDIT_ROSTER
-        .map(r => ({ r, n: r.keys.filter(k => displayEmps.some(e => e.name.includes(k))).length }))
+        .map(r => ({ r, n: r.keys.filter(k => displayEmps.some(e => nameKey(e.name) === k)).length }))
         .sort((a, b) => b.n - a.n)
         .filter(x => x.n > 0)
         .map(x => x.r)[0]
@@ -1669,9 +1643,9 @@ async function loadAuditShifts() {
         ordered = [...displayEmps].sort((a,b) => idx(a.id) - idx(b.id))
         dividerAfterId = orderRow.divider_after || null
     } else if (cfg) {
-        const idx = nm => { const i = cfg.keys.findIndex(k => nm.includes(k)); return i===-1?999:i }
+        const idx = nm => { const i = cfg.keys.indexOf(nameKey(nm)); return i===-1?999:i }
         ordered = [...displayEmps].sort((a,b)=>idx(a.name)-idx(b.name))
-        const dv = displayEmps.find(e => e.name.includes(cfg.dividerAfter))
+        const dv = displayEmps.find(e => nameKey(e.name) === cfg.dividerAfter)
         dividerAfterId = dv ? String(dv.id) : null
     }
     // 「表示順を変更」ボタン用に、今の並びを覚えておく
@@ -1680,11 +1654,11 @@ async function loadAuditShifts() {
     auditDividerId   = dividerAfterId
 
     // 事業所の非常勤要件（リーノ2＝2.0／リーノ1＝1.0）
-    const teamHas = nm => displayEmps.some(e => e.name.includes(nm))
+    const teamHas = nm => displayEmps.some(e => nameKey(e.name) === nm)
     const nonRegReq = teamHas('池内') ? 2.0 : teamHas('坂上') ? 1.0 : 0
     // 月パネル用：常勤換算グループに含める非常勤（週次チェックは児発管を除く全職員で計算）
     const groupMembers = teamHas('池内') ? ['池内','川平','名取','藤沢','藤井','輪湖'] : teamHas('坂上') ? ['坂上','藤井','輪湖'] : []
-    const isGroupMember = nm => groupMembers.some(k => nm.includes(k))
+    const isGroupMember = nm => groupMembers.includes(nameKey(nm))
 
     let hdr = '<th style="min-width:78px;position:sticky;left:0;background:#f8fafc;z-index:2;font-size:12px;padding:4px">名前</th>'
     for (const { d, dow, ds, inMonth } of days) {
@@ -1701,8 +1675,8 @@ async function loadAuditShifts() {
     // 計画相談の時間をできるだけ残したいので、日勤にするのは「足りない分だけ」＝最小日数。
     const optNikkinDays = new Set()
     // ★調整役は「今開いている事業所にいる人」から選ぶ（リーノ2＝池内／リーノ1＝坂上）
-    const optimizer = displayEmps.find(e => e.name.includes('池内'))
-                   || displayEmps.find(e => e.name.includes('坂上'))
+    const optimizer = displayEmps.find(e => nameKey(e.name) === '池内')
+                   || displayEmps.find(e => nameKey(e.name) === '坂上')
     let optAutoDays = 0            // 日勤に振り替えられる日数（休・有給・手動設定の日は振替不可）
     const optWeekInfo = []         // 週ごとの結果（メッセージ用）
     // 月に重なる完全な週（qFrom〜qTo）を取得しているため、すべての週を判定できる
@@ -1717,8 +1691,8 @@ async function loadAuditShifts() {
         // 同時に休むと基準配置が崩れる相手（坂上→藤井／池内→大野）。その相手が休む日を優先して日勤にする
         let partner = null
         for (const [a, b] of PAIR_WARN) {
-            if (optName.includes(a)) partner = displayEmps.find(e => e.name.includes(b))
-            else if (optName.includes(b)) partner = displayEmps.find(e => e.name.includes(a))
+            if (nameKey(optName) === a) partner = displayEmps.find(e => nameKey(e.name) === b)
+            else if (nameKey(optName) === b) partner = displayEmps.find(e => nameKey(e.name) === a)
             if (partner) break
         }
         // 1. 週ごとに「基準時間・他職員の時間・本人の固定分・振替できる日」を集める
@@ -1959,8 +1933,8 @@ async function loadAuditShifts() {
         //   ここで出すのは「ちょうど必要数ちょうど＝もう1人休んだらアウト」の日だけ。
         const pairHits = []
         for (const [a, b] of PAIR_WARN) {
-            const ea = displayEmps.find(e => e.name.includes(a))
-            const eb = displayEmps.find(e => e.name.includes(b))
+            const ea = displayEmps.find(e => nameKey(e.name) === a)
+            const eb = displayEmps.find(e => nameKey(e.name) === b)
             if (!ea || !eb) continue
             for (const { dow, ds } of days) {
                 if (!operatingSet.has(ds)) continue
@@ -2652,7 +2626,9 @@ async function addEmployee() {
     const teamId = parseInt(document.getElementById('new-team').value)
     if (!name) return showMsg('emp-msg', '名前を入力してください', false)
     const defaultShift = document.getElementById('new-shift').value
-    const { error } = await db.from('employees').insert({ name, team_id: teamId, default_shift: defaultShift })
+    // 並び順：今いる職員の最大値+10（末尾に追加。↑↓ボタンで後から調整可）
+    const maxSort = employees.reduce((mx, e) => Math.max(mx, e.sort_order || 0), 0)
+    const { error } = await db.from('employees').insert({ name, team_id: teamId, default_shift: defaultShift, sort_order: maxSort + 10 })
     if (error) return showMsg('emp-msg', 'エラー: ' + error.message, false)
     document.getElementById('new-name').value = ''
     showMsg('emp-msg', name + ' を追加しました', true)
@@ -3132,6 +3108,16 @@ async function adminNakamuke() {
     } catch(e) { alert('エラー: ' + e.message) }
 }
 
+// 重要な削除の二段階確認。内容を確認したうえで、合言葉（ふつうは日付）を手入力させる。
+// 「OK」をうっかり押すだけでは消えないようにするための保険（毎日のバックアップと合わせた二重の守り）。
+function confirmDangerDelete(summary, keyword) {
+    if (!confirm(summary)) return false
+    const ans = prompt('【最終確認】本当に削除する場合は、下の欄に\n「' + keyword + '」\nと入力して OK を押してください。\n（やめる場合はキャンセル）')
+    if (ans === null) return false
+    if (ans.trim() !== String(keyword)) { alert('入力が一致しなかったので、削除を中止しました。'); return false }
+    return true
+}
+
 async function deleteShiftRequest() {
     const empId = document.getElementById('anak-emp').value
     const date  = document.getElementById('anak-date').value
@@ -3149,7 +3135,7 @@ async function deleteShiftRequest() {
         return
     }
     const types = existing.map(r => `${r.requested_type}（${r.status}）`).join('、')
-    if (!confirm(`${emp?.name || ''}  ${date} の以下の申請を全て削除しますか？\n\n${types}`)) return
+    if (!confirmDangerDelete(`${emp?.name || ''}  ${date} の以下の申請を全て削除します。\nこの操作は取り消せません。\n\n${types}`, date)) return
 
     try {
         await db.from('shift_requests').delete()
@@ -3340,7 +3326,7 @@ async function deleteAttendance() {
     const date  = document.getElementById('afix-date').value
     if (!date) { document.getElementById('afix-msg').textContent = '日付を選択してください'; return }
     const emp = employees.find(e => e.id === empId)
-    if (!confirm(`${emp?.name || ''}  ${date} の打刻記録を全て削除しますか？`)) return
+    if (!confirmDangerDelete(`${emp?.name || ''}  ${date} の打刻記録を全て削除します。\nこの操作は取り消せません（復元は夕方のバックアップからになります）。`, date)) return
     try {
         const { error } = await db.from('attendance').delete()
             .eq('employee_id', empId).eq('date', date)
@@ -3612,7 +3598,7 @@ async function buildEmpMonthlyHTML(emp, month) {
 async function printAllMonthly() {
     const month = document.getElementById('monthly-month').value
     if (!month) return alert('月を選択してください')
-    const targets = employees.filter(e => !e.name.includes('梅内'))  // 所長＝梅内を除く
+    const targets = employees.filter(e => nameKey(e.name) !== '梅内')  // 所長＝梅内を除く
     if (!targets.length) return alert('対象の職員がいません')
     const btn = document.getElementById('print-all-btn')
     btn.disabled = true; btn.textContent = '⏳ 準備中…'

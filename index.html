@@ -972,6 +972,19 @@ function toHHMMFn(mins) {
     return `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`
 }
 
+// フルネーム → 判定キー（姓）。同姓の別人や部分一致の事故を防ぐ。
+//   新しい職員が下の勤務時間ルールに該当する場合はここに1行足す（姓だけでなくフルネームで登録）
+const NAME_KEY = {
+    '越原由依':'越原', '小野ゆり':'小野', '小澤夢乃':'小澤', '梅内峰宏':'梅内',
+    '中野愛':'中野',   '藤井ゆみ':'藤井', '舘石鈴夏':'舘石', '池内泰恵':'池内',
+    '大野可奈':'大野', '名取ゆき絵':'名取', '藤沢知美':'藤沢', '輪湖美佳':'輪湖',
+    '川平邦子':'川平', '坂上伶奈':'坂上',
+}
+function nameKey(name) {
+    const n = (name || '').replace(/[\s　]/g, '')
+    return NAME_KEY[n] || n
+}
+
 // 個人別の勤務時間ルール（開始キャップ・残業起算）。川平・藤井は14:00開始、川平は17:30から残業、輪湖は9:00開始・14:00から残業
 const PERSON_TIME = {
     '川平': { capH: 14, capM: 0, otH: 17, otM: 30 },   // 14:00〜17:30
@@ -985,11 +998,12 @@ const PERSON_TIME_HARUNATSU = {
     '名取': { capH: 9, capM: 30, otH: 15, otM: 0 },
 }
 function workTimeRule(shiftType, name) {
+    const k = nameKey(name)
     if (shiftType === '春夏') {
-        for (const k in PERSON_TIME_HARUNATSU) if (name && name.includes(k)) return PERSON_TIME_HARUNATSU[k]
+        if (PERSON_TIME_HARUNATSU[k]) return PERSON_TIME_HARUNATSU[k]
         return { capH: 8, capM: 30, otH: 16, otM: 30 }
     }
-    for (const k in PERSON_TIME) if (name && name.includes(k)) return PERSON_TIME[k]
+    if (PERSON_TIME[k]) return PERSON_TIME[k]
     return { capH: 9, capM: 0, otH: 18, otM: 0 }
 }
 // 休日出勤の実働（分）：平日の開始時刻キャップを使わず打刻どおりに計算（7時間以上は最低60分休憩）
