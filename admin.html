@@ -274,6 +274,10 @@
                     <select id="shift-team-filter" onchange="loadShiftsMonthly()">
                         <option value="all">全員</option>
                     </select>
+                    <button onclick="openBulkShift()" class="no-print"
+                        style="font-size:13px;font-weight:700;color:#1e3a8a;background:#eff6ff;border:1px solid #bfdbfe;padding:7px 12px;border-radius:10px;cursor:pointer">
+                        📅 期間一括設定
+                    </button>
                 </div>
             </div>
             <div class="print-note" id="pn-shifts"></div>
@@ -697,6 +701,24 @@ const HOLIDAYS = new Set([
     '2026-10-12', // スポーツの日
     '2026-11-03', // 文化の日
     '2026-11-23', // 勤労感謝の日
+    // 2027年
+    '2027-01-01', // 元日
+    '2027-01-11', // 成人の日
+    '2027-02-11', // 建国記念の日
+    '2027-02-23', // 天皇誕生日
+    '2027-03-21', // 春分の日
+    '2027-03-22', // 振替休日
+    '2027-04-29', // 昭和の日
+    '2027-05-03', // 憲法記念日
+    '2027-05-04', // みどりの日
+    '2027-05-05', // こどもの日
+    '2027-07-19', // 海の日
+    '2027-08-11', // 山の日
+    '2027-09-20', // 敬老の日
+    '2027-09-23', // 秋分の日
+    '2027-10-11', // スポーツの日
+    '2027-11-03', // 文化の日
+    '2027-11-23', // 勤労感謝の日
 ])
 
 // ---- パスワード ----
@@ -1365,6 +1387,93 @@ async function setShift(empId, date, value, tdEl) {
 }
 
 function changeShiftMonth(d) { shiftMonthOffset += d; loadShiftsMonthly() }
+
+// ===== 期間一括設定（年末年始・お盆などをまとめて設定）=====
+function openBulkShift() {
+    const old = document.getElementById('bulk-shift-dlg')
+    if (old) old.remove()
+    const ov = document.createElement('div')
+    ov.id = 'bulk-shift-dlg'
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px'
+    const shiftOpts = SHIFT_TYPES.map(s => `<option value="${s}"${s==='休'?' selected':''}>${s}</option>`).join('')
+    const teamOpts = `<option value="all">全員</option>` + teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('')
+    const inpStyle = 'width:100%;margin:4px 0 12px;padding:9px;border:1.5px solid #d1d5db;border-radius:8px;font-size:14px'
+    ov.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:420px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.3);padding:20px">
+        <div style="font-size:17px;font-weight:800;color:#1e3a8a;margin-bottom:4px">📅 期間一括設定</div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:14px;line-height:1.7">指定した期間の<b>全日</b>を、選んだシフトに<b>まとめて設定</b>します（年末年始・お盆などに便利）。土日も含めて上書きします。</div>
+        <label style="font-size:12px;font-weight:700;color:#374151">開始日</label><br>
+        <input type="date" id="bulk-from" style="${inpStyle}">
+        <label style="font-size:12px;font-weight:700;color:#374151">終了日</label><br>
+        <input type="date" id="bulk-to" style="${inpStyle}">
+        <label style="font-size:12px;font-weight:700;color:#374151">シフト</label><br>
+        <select id="bulk-shift" style="${inpStyle}">${shiftOpts}</select>
+        <label style="font-size:12px;font-weight:700;color:#374151">対象</label><br>
+        <select id="bulk-team" style="${inpStyle}">${teamOpts}</select>
+        <div id="bulk-msg" style="font-size:13px;font-weight:600;min-height:18px;margin:2px 0 10px"></div>
+        <div style="display:flex;gap:8px">
+            <button id="bulk-ok" style="flex:1;padding:11px;background:#1e3a8a;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">この内容で設定する</button>
+            <button id="bulk-cancel" style="padding:11px 14px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">やめる</button>
+        </div>
+    </div>`
+    document.body.appendChild(ov)
+    ov.querySelector('#bulk-cancel').onclick = () => ov.remove()
+    ov.onclick = e => { if (e.target === ov) ov.remove() }
+    ov.querySelector('#bulk-ok').onclick = applyBulkShift
+}
+
+async function applyBulkShift() {
+    const from = document.getElementById('bulk-from').value
+    const to   = document.getElementById('bulk-to').value
+    const shiftType = document.getElementById('bulk-shift').value
+    const teamSel   = document.getElementById('bulk-team').value
+    const msgEl = document.getElementById('bulk-msg')
+    const okBtn = document.getElementById('bulk-ok')
+    if (!from || !to) { msgEl.style.color = '#b91c1c'; msgEl.textContent = '開始日と終了日を選んでください'; return }
+    if (from > to)    { msgEl.style.color = '#b91c1c'; msgEl.textContent = '終了日は開始日より後にしてください'; return }
+    // 期間内の日付リストを作る
+    const dates = []
+    for (let d = new Date(from + 'T00:00:00'); d <= new Date(to + 'T00:00:00'); d.setDate(d.getDate() + 1))
+        dates.push(d.toLocaleDateString('sv-SE'))
+    const targets = teamSel === 'all' ? employees : employees.filter(e => e.team_id === parseInt(teamSel))
+    if (!targets.length) { msgEl.style.color = '#b91c1c'; msgEl.textContent = '対象の職員がいません'; return }
+    const total = targets.length * dates.length
+    const teamLabel = teamSel === 'all' ? '全員' : (teams.find(t => t.id === parseInt(teamSel))?.name || '')
+    if (!confirm(`${teamLabel}（${targets.length}名）× ${from}〜${to}（${dates.length}日間）を「${shiftType}」にします。\n合計 ${total} 件を上書きします。よろしいですか？`)) return
+    okBtn.disabled = true
+    msgEl.style.color = '#6b7280'; msgEl.textContent = '設定中…'
+    try {
+        const empIds = targets.map(e => e.id)
+        // 既存シフトをまとめて取得（1回のクエリ）
+        const { data: existing, error: selErr } = await db.from('shifts')
+            .select('id,employee_id,date').in('employee_id', empIds).gte('date', from).lte('date', to)
+        if (selErr) throw selErr
+        const existMap = {}
+        for (const r of existing || []) existMap[`${r.employee_id}_${r.date}`] = r.id
+        const updateIds = [], insertRows = []
+        for (const emp of targets) for (const date of dates) {
+            const hit = existMap[`${emp.id}_${date}`]
+            if (hit) updateIds.push(hit)
+            else insertRows.push({ employee_id: emp.id, date, shift_type: shiftType })
+        }
+        // 既存は一括update（全部同じシフトなのでまとめて）。新規は一括insert
+        if (updateIds.length) {
+            const { error } = await db.from('shifts').update({ shift_type: shiftType }).in('id', updateIds)
+            if (error) throw error
+        }
+        if (insertRows.length) {
+            const { error } = await db.from('shifts').insert(insertRows)
+            if (error) throw error
+        }
+        msgEl.style.color = '#15803d'
+        msgEl.textContent = `✓ ${total}件を「${shiftType}」に設定しました`
+        loadShiftsMonthly()
+        setTimeout(() => { const ov = document.getElementById('bulk-shift-dlg'); if (ov) ov.remove() }, 1300)
+    } catch(e) {
+        okBtn.disabled = false
+        msgEl.style.color = '#b91c1c'
+        msgEl.textContent = '✗ エラー: ' + e.message
+    }
+}
 
 // ===== 監査用シフト表 =====
 let auditMonthOffset = 0
